@@ -1,6 +1,6 @@
 {
   "name": "gladys-cambridge-audio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Gladys Assistant external integration for Cambridge Audio StreamMagic amplifiers and streamers (power, volume, mute, source, playback, title), over their local websocket. Unofficial, not affiliated with Cambridge Audio.",
   "type": "module",
