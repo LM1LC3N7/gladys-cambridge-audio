@@ -524,6 +524,51 @@ test('I1 Power on: a slow wake-up is checked again in the background', async (t)
   assert.deepEqual(volumes(fake), [50]);
 });
 
+test('R1 one wake-up check chain per device: a new press starts it over', async (t) => {
+  const {
+    gladys,
+    device: fake,
+    app,
+  } = await setup(t, {
+    deviceOptions: { wakeDelay: 60_000 },
+    timings: { wakeCheckDelay: 100, wakeChecks: 50 },
+  });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false });
+  await settle();
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  await settle(150);
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.equal(app.wakeChecks.size, 1);
+  const before = fake.reads.filter((p) => p === '/zone/state').length;
+  await settle(1_050);
+  const checks = fake.reads.filter((p) => p === '/zone/state').length - before;
+  // One chain: about one read every 100 ms (two chains would give about 20).
+  assert.ok(checks >= 5 && checks <= 12, `${checks} reads in 1 s`);
+  await app.stop();
+  assert.equal(app.wakeChecks.size, 0, 'stop() ends the chain');
+  const stopped = fake.reads.length;
+  await settle(250);
+  assert.equal(fake.reads.length, stopped);
+});
+
+test('R2 a wake-up check without answer does not make the next ones drop theirs', async (t) => {
+  const timings = { staleAnswer: 200, wakeCheckDelay: 250, wakeChecks: 6, preRead: 100 };
+  assert.ok(TIMINGS.wakeCheckDelay > TIMINGS.staleAnswer, 'the real timings keep the order');
+  const { gladys, device: fake } = await setup(t, { deviceOptions: { wakeDelay: 100 }, timings });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.deepEqual(volumes(fake), [], 'still waking up');
+  // The first background read is left unanswered (it times out), then the
+  // device answers normally: the volume ends at the cap.
+  fake.options.dropReads = 1;
+  await waitFor(() => volumes(fake).length === 1, 'the cap', 3_000);
+  assert.deepEqual(volumes(fake), [50]);
+  assert.equal(fake.options.dropReads, 0, 'one read was dropped');
+});
+
 test('I2 the toggle only from pause or stop (Play) and from play (Pause)', async (t) => {
   const { gladys, device: fake } = await setup(t);
   const device = await createDevice(gladys);

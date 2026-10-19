@@ -29,8 +29,9 @@ the notes of the version's GitHub Release.
   then at intervals doubled up to 5 minutes.
 - "Find the devices" and "Check the devices" buttons.
 - Unmuting lowers a volume above the cap to the cap first; Power on brings
-  the volume back to the cap after the wake-up (checked again for about 15 s
-  when the device is slow to wake up).
+  the volume back to the cap after the wake-up (checked again every 2.5 s for
+  about 15 s when the device is slow to wake up, one check at a time per
+  device).
 - Standby and mute go before the commands waiting for a device.
 
 ### Fixed

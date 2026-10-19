@@ -63,7 +63,9 @@ export async function startFakeDevice({
   }
   const commands = [];
   const subscriptions = new Map();
-  const options = { silent, refuse, delay, wakeDelay };
+  const options = { silent, refuse, delay, wakeDelay, dropReads: 0 };
+  /** Every read (a request without parameters), by path, in order. */
+  const reads = [];
   const sockets = new Set();
   const upgrades = [];
 
@@ -135,6 +137,12 @@ export async function startFakeDevice({
       }
       const keys = Object.keys(params).filter((k) => k !== 'zone');
       if (keys.length === 0 && READS[path]) {
+        reads.push(path);
+        if (path === '/zone/state' && options.dropReads > 0) {
+          // A read of the zone left unanswered (a busy device).
+          options.dropReads -= 1;
+          return;
+        }
         respond(socket, path, dataOf(path));
         return;
       }
@@ -171,6 +179,7 @@ export async function startFakeDevice({
     port: server.address().port,
     state,
     commands,
+    reads,
     options,
     upgrades,
     /** Changes the state like the front panel would, and pushes it. */

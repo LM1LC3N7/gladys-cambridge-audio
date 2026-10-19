@@ -101,9 +101,13 @@ up to date at the end of every milestone.
     budget; volume unknown (pre-amplifier on): refused, "nothing sent";
   - Power on: `/zone/state` is read again after the wake-up, and the volume
     lowered to the cap when above it; when the device cannot tell yet
-    (still waking up), checked again every 1.5 s, 10 times at most, through
+    (still waking up), checked again every 2.5 s, 6 times at most, through
     the device queue (the ack of Power on never depends on it). After that,
-    nothing more is done (said in the docs).
+    nothing more is done (said in the docs). (Approval 2026-10-19) One chain
+    per device (`wakeChecks`: unitId -> timer): a new Power on cancels the
+    running one and starts over at attempt 1; stop() clears them. The delay
+    (2.5 s) is longer than the late-answer guard (2 s), so a check that
+    timed out never makes the next one drop its answer.
     The volume is only set and published when `pre_amp_mode` is true (as Home
     Assistant): otherwise refused, "nothing sent".
 - Volume validated strictly before queueing: an integer 0..100 as a number or
@@ -122,7 +126,11 @@ up to date at the end of every milestone.
   waiting (after the other urgent ones), never before the one running.
 - Late answers (review 2026-10-19): after a request timed out, the first
   `response` on its path within 2 s is dropped (data included), so it never
-  settles the next request on that path with an old state.
+  settles the next request on that path with an old state. Known limit of
+  the protocol (answers matched by path only), without danger: for 2 s
+  after a timeout, a quick new request on the same path that gets its answer
+  first has it dropped and fails ("not read in time" or "sent, without
+  confirmation"), never acting on a wrong state.
 - Source: the select values are the source ids of the device (`/system/sources`,
   plain identifiers only), labels their names. A command is checked against
   the options, then against the list read again from the device.

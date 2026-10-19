@@ -123,6 +123,8 @@ export class CambridgeAudioApp {
     this.createdStale = false;
     /** unitId -> timer of the grouped publication of its states */
     this.publishTimers = new Map();
+    /** unitId -> { timer }: the one wake-up check chain of a device (after Power on) */
+    this.wakeChecks = new Map();
     this.scanning = undefined;
     this.lastAutoScan = -Infinity;
     this.generation = 0;
@@ -191,6 +193,9 @@ export class CambridgeAudioApp {
       this.timers.clearTimeout(handle);
     }
     this.publishTimers.clear();
+    for (const unitId of [...this.wakeChecks.keys()]) {
+      this.cancelWakeCheck(unitId);
+    }
     if (this.persistTimer) {
       this.timers.clearTimeout(this.persistTimer);
       this.persistTimer = undefined;
@@ -823,6 +828,8 @@ export class CambridgeAudioApp {
     const send = (message) => this.send(device, link, message, started, context);
     switch (key) {
       case FEATURES.POWER_ON: {
+        // A new press starts over: the check chain of the previous one stops.
+        this.cancelWakeCheck(device.unitId);
         await send(COMMANDS.powerOn());
         // A device wakes up at the volume it had: brought back to the cap.
         // Within what is left of this command first, then in the background
@@ -970,28 +977,54 @@ export class CambridgeAudioApp {
     return true;
   }
 
-  /** After a Power on: the cap checked again every `wakeCheckDelay`, `wakeChecks` times at most. */
-  capAfterWake(device, attempt) {
+  /** Cancels the wake-up check chain of a device, if any. */
+  cancelWakeCheck(unitId) {
+    const chain = this.wakeChecks.get(unitId);
+    if (chain) {
+      this.timers.clearTimeout(chain.timer);
+      this.wakeChecks.delete(unitId);
+    }
+  }
+
+  /**
+   * After a Power on: the cap checked again every `wakeCheckDelay`,
+   * `wakeChecks` times at most. One chain per device: a new chain (another
+   * Power on) replaces the running one, which stops at its next step. The
+   * delay is longer than `staleAnswer`: a check that timed out never makes
+   * the next one drop its answer.
+   */
+  capAfterWake(device, attempt, chain = { timer: undefined }) {
+    if (attempt === 1) {
+      this.cancelWakeCheck(device.unitId);
+      this.wakeChecks.set(device.unitId, chain);
+    }
+    const current = () => this.wakeChecks.get(device.unitId) === chain;
     if (attempt > this.timings.wakeChecks) {
+      this.wakeChecks.delete(device.unitId);
       this.logger.info(`${deviceName(device)}: volume not confirmed after waking up`);
       return;
     }
     const generation = this.generation;
-    this.timers.setTimeout(() => {
-      if (generation !== this.generation) {
+    chain.timer = this.timers.setTimeout(() => {
+      if (generation !== this.generation || !current()) {
         return;
       }
       this.enqueue(device.unitId, async () => {
         const link = this.connectedLink(device);
-        if (!link) {
-          return false;
+        if (!link || !current()) {
+          return !current();
         }
         return this.capVolume(device, link, () => this.timings.preRead);
       })
         .catch(() => false)
         .then((done) => {
-          if (!done) {
-            this.capAfterWake(device, attempt + 1);
+          if (!current()) {
+            return;
+          }
+          if (done) {
+            this.wakeChecks.delete(device.unitId);
+          } else {
+            this.capAfterWake(device, attempt + 1, chain);
           }
         });
     }, this.timings.wakeCheckDelay);

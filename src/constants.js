@@ -73,9 +73,11 @@ export const TIMINGS = Object.freeze({
   /**
    * After a Power on whose volume could not be read in the command budget:
    * the cap is checked again every `wakeCheckDelay`, `wakeChecks` times.
+   * Longer than `staleAnswer`: after a check that timed out, the next one
+   * never has its answer dropped as a late one.
    */
-  wakeCheckDelay: 1_500,
-  wakeChecks: 10,
+  wakeCheckDelay: 2_500,
+  wakeChecks: 6,
   /** After a request timed out, the first answer on its path within this is dropped (late). */
   staleAnswer: 2_000,
   /** The states of one device are published at most this often (a knob turned fast). */

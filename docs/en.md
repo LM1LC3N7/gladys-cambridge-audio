@@ -58,7 +58,7 @@ integration, except in the two cases where Gladys would make it heard:
   nothing is sent.
 - **Power on**: after the wake-up, the volume is read again and set to the
   cap when above it. When the device is slow to wake up, the integration
-  checks again every 1.5 s for about 15 s; after that the volume is not
+  checks again every 2.5 s for about 15 s; after that the volume is not
   corrected (the device resumes the volume it had before standby).
 
 When the pre-amplifier of the device is off (a streamer plugged into another

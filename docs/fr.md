@@ -59,7 +59,7 @@ dans deux cas où Gladys le rendrait audible :
   ne peut pas être lu, rien n'est envoyé.
 - **Allumer** : après le réveil, le volume est relu et ramené au plafond s'il
   le dépasse. Si l'appareil met du temps à se réveiller, l'intégration
-  revérifie toutes les 1,5 s pendant 15 s environ ; au-delà, le volume n'est
+  revérifie toutes les 2,5 s pendant 15 s environ ; au-delà, le volume n'est
   pas corrigé (l'appareil reprend le volume qu'il avait avant sa veille).
 
 Si le préampli de l'appareil est désactivé (streamer branché sur un autre
