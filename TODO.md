@@ -83,26 +83,46 @@ up to date at the end of every milestone.
   is `unknown/binary`, read only (`zone.power`; 0 also when the device does
   not answer after a failed connection attempt, not on a simple drop).
   "Power on" sends `power: ON`, "Standby" `power: NETWORK` (network standby,
-  as aiostreammagic's `power_off`: the device can be woken up again). Standby
-  on a device that is not connected sends nothing and is not an error.
+  as aiostreammagic's `power_off`: the device can be woken up again).
+  (Review 2026-10-19) Standby on a device that is not connected is an error
+  (UNREACHABLE, "… nothing sent"), never a success: a device whose
+  connection just dropped may still be on, "already in standby" would be a
+  guess.
 - **Volume cap** (`max_volume`, 1..100, default 50 %): a higher volume asked
   from Gladys is set to the cap (clamped, logged), not refused, so a scene
   "volume 80" still does something. The cap is read inside the queued task,
   just before the message leaves (a configuration saved meanwhile applies).
   The feature range stays 0..100 (frozen at creation: changing the cap never
   changes the device structure). A volume set on the device itself above the
-  cap is shown, never lowered by the integration. The volume is only set and
-  published when `pre_amp_mode` is true (as Home Assistant): otherwise
-  refused, "nothing sent".
+  cap is shown, not lowered while the device plays, except by the two
+  commands of Gladys that would make it heard (review 2026-10-19):
+  - unmute: the volume read with the mute decides; above the cap,
+    `volume_percent: <cap>` is sent first, then `mute: false`, in the same
+    budget; volume unknown (pre-amplifier on): refused, "nothing sent";
+  - Power on: `/zone/state` is read again after the wake-up, and the volume
+    lowered to the cap when above it; when the device cannot tell yet
+    (still waking up), checked again every 1.5 s, 10 times at most, through
+    the device queue (the ack of Power on never depends on it). After that,
+    nothing more is done (said in the docs).
+    The volume is only set and published when `pre_amp_mode` is true (as Home
+    Assistant): otherwise refused, "nothing sent".
 - Volume validated strictly before queueing: an integer 0..100 as a number or
   a string of digits; null, '', booleans, 12.5, '12abc', NaN refused.
 - Mute is a push (Gladys sends a press, not a target): `/zone/state` is read
   again just before (1.5 s at most) and the explicit `mute: true|false` sent,
   never a toggle. Unknown mute state: nothing sent. Not a switch.
 - Play / pause: the explicit action when the source lists it in `controls`
-  (or lists nothing), else the toggle, sent only after `/zone/play_state`
-  read again says it is needed (Play while playing, Pause while paused: nothing
-  sent). Next / previous: `skip_track` ±1.
+  (or lists nothing), else the toggle, decided on `/zone/play_state` read
+  again (review 2026-10-19): Play toggles only from `pause` or `stop`
+  (nothing to do on `play`), Pause only from `play` (nothing to do on
+  `pause` or `stop`); any other state (`connecting`, `buffering`, `ready`,
+  `NETWORK`, unknown) is refused, "play state X, nothing sent". Next /
+  previous: `skip_track` ±1.
+- Queue (review 2026-10-19): Standby and Mute go before the commands still
+  waiting (after the other urgent ones), never before the one running.
+- Late answers (review 2026-10-19): after a request timed out, the first
+  `response` on its path within 2 s is dropped (data included), so it never
+  settles the next request on that path with an old state.
 - Source: the select values are the source ids of the device (`/system/sources`,
   plain identifiers only), labels their names. A command is checked against
   the options, then against the list read again from the device.
@@ -120,7 +140,9 @@ up to date at the end of every milestone.
   failure up to 5 minutes; the count is only reset by a connection that
   stayed up 60 s (a device that drops right after connecting is not asked
   every 10 s). A configuration save or a search asks for a reconnection, but
-  never sooner than 10 s after the last attempt. A ping every 30 s, no pong
+  never sooner than 10 s after the last attempt; a reconnection to Gladys
+  (`connected`) does not (review 2026-10-19: Gladys flapping must never make
+  the devices asked faster). A ping every 30 s, no pong
   within 10 s closes the socket. Not persisted in /data: there is no rate
   limit nor credential to protect, and a restart starting over at 10 s is
   wanted.
@@ -141,7 +163,16 @@ up to date at the end of every milestone.
   reconnection). No redirect followed, no compression negotiated. The device
   table of `/data` has no prototype.
 - Headers: `Origin: ws://<host>` and `Host: <host>:<port>` as aiostreammagic
-  sends them (the device checks them); no User-Agent set.
+  sends them; no User-Agent set. (Review 2026-10-19) `Host` kept: Node would
+  send `Host: <host>` without `:80`, aiostreammagic forces `<host>:80`, and
+  whether the device needs it is not known without a real device (milestone
+  2: drop it if useless).
+- mDNS answers (review 2026-10-19): only IPv4 addresses of a local network
+  are asked (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 but
+  169.254.169.254); public, loopback, 0/8, broadcast (x.x.x.255,
+  255.255.255.255) and multicast never. Typed addresses are not filtered.
+- Flood guard (review 2026-10-19): every frame counts, before parsing
+  (junk, binary frames and unknown paths included).
 - Publication: grouped per device (at most one `publishChangedStates` per
   second), only the created devices. Text features show "—" when nothing
   plays (and in standby).

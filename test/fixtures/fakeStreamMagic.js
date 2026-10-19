@@ -2,7 +2,8 @@
 // A fake StreamMagic device on 127.0.0.1: the websocket `/smoip`, the paths
 // used by the integration, the answers and pushed updates of aiostreammagic's
 // protocol. `silent` leaves commands unanswered, `refuse` answers them with an
-// error result, `noPreAmp` turns the pre-amplifier off.
+// error result, `noPreAmp` turns the pre-amplifier off, `delay` answers
+// commands late, `wakeDelay` reports the power on only after a while.
 // -----------------------------------------------------------------------------
 
 import { WebSocketServer } from 'ws';
@@ -53,6 +54,8 @@ export async function startFakeDevice({
   noPreAmp = false,
   checkOrigin = true,
   port = 0,
+  delay = 0,
+  wakeDelay = 0,
 } = {}) {
   const state = defaultState(unitId);
   if (noPreAmp) {
@@ -60,7 +63,7 @@ export async function startFakeDevice({
   }
   const commands = [];
   const subscriptions = new Map();
-  const options = { silent, refuse };
+  const options = { silent, refuse, delay, wakeDelay };
   const sockets = new Set();
   const upgrades = [];
 
@@ -143,9 +146,24 @@ export async function startFakeDevice({
         respond(socket, path, undefined, 500, 'Not allowed in this state');
         return;
       }
-      const changed = apply(path, params);
-      respond(socket, path, undefined);
-      changed.forEach(push);
+      const answer = () => {
+        const changed = apply(path, params);
+        respond(socket, path, undefined);
+        changed.forEach(push);
+        if (path === '/system/power' && params.power === 'ON' && options.wakeDelay > 0) {
+          // A slow wake-up: on, but the zone says so only after a while.
+          state.zone.power = false;
+          setTimeout(() => {
+            state.zone.power = true;
+            push('/zone/state');
+          }, options.wakeDelay);
+        }
+      };
+      if (options.delay > 0) {
+        setTimeout(answer, options.delay);
+      } else {
+        answer();
+      }
     });
   });
 
@@ -159,7 +177,17 @@ export async function startFakeDevice({
     change(field, values) {
       Object.assign(state[field], values);
       const path = Object.keys(READS).find((p) => READS[p] === field);
-      push(path);
+      // The integration subscribes right after its snapshot: a change made
+      // before its subscription arrived is pushed once it does.
+      const started = Date.now();
+      const tryPush = () => {
+        if ((subscriptions.get(path)?.size ?? 0) > 0 || Date.now() - started > 1_000) {
+          push(path);
+        } else {
+          setTimeout(tryPush, 5);
+        }
+      };
+      tryPush();
     },
     /** Sends anything on every socket (hostile device). */
     broadcast(text) {

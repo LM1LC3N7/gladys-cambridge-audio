@@ -28,10 +28,26 @@ the notes of the version's GitHub Release.
   named in the integration status; the websocket is opened again after 10 s,
   then at intervals doubled up to 5 minutes.
 - "Find the devices" and "Check the devices" buttons.
+- Unmuting lowers a volume above the cap to the cap first; Power on brings
+  the volume back to the cap after the wake-up (checked again for about 15 s
+  when the device is slow to wake up).
+- Standby and mute go before the commands waiting for a device.
+
+### Fixed
+
+- Play and pause through the toggle only from a known state (Play from pause
+  or stop, Pause from play); an in-between state is refused, nothing sent.
+- Standby on a device that is not connected is reported "nothing sent",
+  never as done.
+- The late answer of a request that timed out no longer settles the next
+  request on the same path.
+- A reconnection to Gladys no longer asks the silent devices again sooner.
 
 ### Security
 
 - Messages are bounded (256 KB), parsed once, and only the expected fields are
   kept; a unit id or a source id `__proto__`, `constructor` or `prototype` is
   refused, and the device table has no prototype. A socket flooded with
-  messages is closed.
+  frames is closed (every frame counts, before parsing).
+- The mDNS search only connects to local network addresses (no public,
+  loopback, broadcast, multicast or cloud metadata address).

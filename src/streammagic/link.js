@@ -137,6 +137,8 @@ export class DeviceLink {
         createSocket: this.createSocket,
         onMessage: (path, data) => this.receive(session, path, data),
         onClose: () => this.closed(session),
+        onFrame: (source) => this.frame(source),
+        staleMs: this.timings.staleAnswer,
       });
       if (this.stopped) {
         session.close();
@@ -200,18 +202,6 @@ export class DeviceLink {
     if (session !== this.session || !Object.hasOwn(PARSERS, path)) {
       return;
     }
-    // A device flooding the socket is closed, then asked again spaced out.
-    const now = this.now();
-    this.messages.push(now);
-    while (this.messages.length > 0 && now - this.messages[0] > this.timings.floodWindow) {
-      this.messages.shift();
-    }
-    if (this.messages.length > this.timings.floodMessages) {
-      this.logger?.warn?.(`${this.key}: too many messages, connection closed`);
-      this.messages = [];
-      session.close();
-      return;
-    }
     if (this.connectedAt === undefined) {
       // The snapshot is being read: its answers carry the same data.
       return;
@@ -228,6 +218,24 @@ export class DeviceLink {
     }
     this.state = { ...this.state, [field]: parsed };
     this.onEvent('update', this, field);
+  }
+
+  /**
+   * Every frame of the socket, counted before it is parsed: a device flooding
+   * the socket (junk, unknown paths, binary frames included) is closed, then
+   * asked again spaced out.
+   */
+  frame(session) {
+    const now = this.now();
+    this.messages.push(now);
+    while (this.messages.length > 0 && now - this.messages[0] > this.timings.floodWindow) {
+      this.messages.shift();
+    }
+    if (this.messages.length > this.timings.floodMessages) {
+      this.logger?.warn?.(`${this.key}: too many messages, connection closed`);
+      this.messages = [];
+      session.close();
+    }
   }
 
   closed(session) {

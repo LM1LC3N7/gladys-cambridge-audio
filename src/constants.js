@@ -70,6 +70,14 @@ export const TIMINGS = Object.freeze({
   /** A ping every `heartbeat`; no pong within `pongTimeout` closes the socket. */
   heartbeat: 30_000,
   pongTimeout: 10_000,
+  /**
+   * After a Power on whose volume could not be read in the command budget:
+   * the cap is checked again every `wakeCheckDelay`, `wakeChecks` times.
+   */
+  wakeCheckDelay: 1_500,
+  wakeChecks: 10,
+  /** After a request timed out, the first answer on its path within this is dropped (late). */
+  staleAnswer: 2_000,
   /** The states of one device are published at most this often (a knob turned fast). */
   publishDelay: 1_000,
   /** Writes to /data are grouped. */

@@ -8,11 +8,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
-import { CambridgeAudioApp, parseVolumeCommand } from '../src/app.js';
+import { CambridgeAudioApp, isLanAddress, parseVolumeCommand } from '../src/app.js';
+import { createWebSocket } from '../src/streammagic/connection.js';
 import { NOTHING, TIMINGS } from '../src/constants.js';
 import { registerHandlers } from '../src/handlers.js';
 import { MemoryStore } from '../src/store.js';
-import { DeviceLink, identify } from '../src/streammagic/link.js';
+import { DeviceLink } from '../src/streammagic/link.js';
 import { UNIT_ID, startFakeDevice } from './fixtures/fakeStreamMagic.js';
 
 const SELECTOR = 'cambridge-audio';
@@ -316,8 +317,10 @@ test('a device that stops answering: power 0, named in the status, reconnected l
   const ack = await set(gladys, device, 'volume', 10);
   assert.equal(ack.success, false);
   assert.match(ack.error, /nothing sent/);
-  // Standby on a device that does not answer: nothing to do, not an error.
-  assert.equal((await set(gladys, device, 'standby')).success, true);
+  // Standby on a device that does not answer: never "done", nothing sent.
+  const standby = await set(gladys, device, 'standby');
+  assert.equal(standby.success, false);
+  assert.match(standby.error, /not connected .*nothing sent/);
   const link = [...app.links.values()][0];
   assert.ok(link.failures >= 1);
   // Back on the network: found again at the next attempt (spaced out).
@@ -415,23 +418,29 @@ test('hostile messages are ignored; a flood or an oversized message closes the s
 
 test('"Find the devices": mDNS answers identified, then created like typed ones', async (t) => {
   let fakePort;
+  const urls = [];
   const { gladys, device: fake } = await setup(t, {
     config: { addresses: '' },
+    deviceOptions: { checkOrigin: false },
     scanResults: {
       mdns: [
-        { name: 'x', host: 'cxn.local', addresses: ['127.0.0.1', 'fe80::1'], port: 80, txt: [] },
+        { name: 'x', host: 'cxn.local', addresses: ['192.168.1.40', 'fe80::1'], port: 80, txt: [] },
         { name: 'junk', host: null, addresses: 'nope', port: null, txt: [] },
       ],
     },
-    // The fake device is not on port 80: the probe is redirected to it.
-    identify: ({ address, ...rest }) =>
-      identify({ address: { ...address, port: fakePort }, ...rest }),
+    // Every socket goes to the fake device on the loopback interface: the
+    // tests never leave it, whatever address the mDNS answer gives.
+    createSocket: (url, options) => {
+      urls.push(url);
+      return createWebSocket(`ws://127.0.0.1:${fakePort}/smoip`, options);
+    },
   });
   fakePort = fake.port;
   const ack = await gladys.fake.action('find_devices');
   assert.equal(ack.success, true);
-  assert.match(ack.data.message.en, /Found: Living room \(CXN100\) \(127\.0\.0\.1\)/);
+  assert.match(ack.data.message.en, /Found: Living room \(CXN100\) \(192\.168\.1\.40\)/);
   assert.match(ack.data.message.fr, /Trouvés/);
+  assert.equal(urls[0], 'ws://192.168.1.40:80/smoip', 'always port 80');
   await discovered(gladys);
 });
 
@@ -452,4 +461,227 @@ test('the known devices are kept in /data', async (t) => {
   assert.equal(saved.host, '127.0.0.1');
   assert.equal(saved.sourceOptions.length, 3);
   assert.equal(JSON.stringify(store.data).includes('token'), false);
+});
+
+// --- Review fixes ------------------------------------------------------------------
+
+const volumes = (fake) =>
+  fake.commands.filter((c) => 'volume_percent' in c.params).map((c) => c.params.volume_percent);
+
+test('I1 unmuting never plays above the cap: the volume is lowered first', async (t) => {
+  const { gladys, device: fake } = await setup(t);
+  const device = await createDevice(gladys);
+  fake.change('zone', { volume_percent: 90, mute: true });
+  await settle();
+  assert.equal((await set(gladys, device, 'mute')).success, true);
+  assert.deepEqual(
+    fake.commands.map((c) => c.params),
+    [
+      { zone: 'ZONE1', volume_percent: 50 },
+      { zone: 'ZONE1', mute: false },
+    ],
+  );
+  // Muting does not touch the volume.
+  fake.change('zone', { volume_percent: 90 });
+  await settle();
+  assert.equal((await set(gladys, device, 'mute')).success, true);
+  assert.deepEqual(fake.commands.at(-1).params, { zone: 'ZONE1', mute: true });
+  assert.deepEqual(volumes(fake), [50]);
+  // Unmuting without a volume read: refused, nothing sent.
+  delete fake.state.zone.volume_percent;
+  const before = fake.commands.length;
+  const ack = await set(gladys, device, 'mute');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /volume unknown, nothing sent/);
+  assert.equal(fake.commands.length, before);
+});
+
+test('I1 Power on: a device waking up above the cap is brought back to it', async (t) => {
+  const { gladys, device: fake } = await setup(t);
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.deepEqual(volumes(fake), [50]);
+  // At or below the cap: nothing more is sent.
+  fake.change('zone', { power: false, volume_percent: 30 });
+  await settle();
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.deepEqual(volumes(fake), [50]);
+});
+
+test('I1 Power on: a slow wake-up is checked again in the background', async (t) => {
+  const { gladys, device: fake } = await setup(t, {
+    deviceOptions: { wakeDelay: 150 },
+    timings: { wakeCheckDelay: 50, wakeChecks: 10 },
+  });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.deepEqual(volumes(fake), [], 'not on yet when the command is answered');
+  await waitFor(() => volumes(fake).length === 1, 'the cap after the wake-up');
+  assert.deepEqual(volumes(fake), [50]);
+});
+
+test('I2 the toggle only from pause or stop (Play) and from play (Pause)', async (t) => {
+  const { gladys, device: fake } = await setup(t);
+  const device = await createDevice(gladys);
+  for (const state of ['connecting', 'buffering', 'NETWORK', 'ready', 'weird']) {
+    fake.state.play.state = state;
+    for (const key of ['play', 'pause']) {
+      const ack = await set(gladys, device, key);
+      assert.equal(ack.success, false, `${key} on ${state}`);
+      assert.match(ack.error, new RegExp(`play state ${state}, nothing sent`));
+    }
+  }
+  assert.equal(fake.commands.length, 0);
+  fake.state.play.state = 'stop';
+  assert.equal((await set(gladys, device, 'pause')).success, true);
+  assert.equal(fake.commands.length, 0, 'Pause on stop: nothing to do');
+  assert.equal((await set(gladys, device, 'play')).success, true);
+  assert.equal(fake.commands.at(-1).params.action, 'toggle');
+  assert.equal(fake.state.play.state, 'play');
+});
+
+test('I3 Standby right after a connection drop: not connected, nothing sent', async (t) => {
+  const { gladys, device: fake } = await setup(t, {
+    timings: { reconnectBase: 5_000, reconnectMax: 5_000 },
+  });
+  const device = await createDevice(gladys);
+  fake.drop();
+  await settle(50);
+  const ack = await set(gladys, device, 'standby');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /not connected .*nothing sent/);
+  assert.equal(fake.state.zone.power, true);
+});
+
+test('M1 the late answer of a timed-out request never settles the next one', async (t) => {
+  const { gladys, device: fake } = await setup(t, { timings: { commandBudget: 300 } });
+  const device = await createDevice(gladys);
+  fake.options.silent = true;
+  assert.equal((await set(gladys, device, 'volume', 40)).success, false);
+  fake.options.silent = false;
+  fake.state.zone.mute = false;
+  const press = set(gladys, device, 'mute');
+  // The late answer of the volume (an old state, muted) arrives first.
+  fake.broadcast(
+    JSON.stringify({
+      path: '/zone/state',
+      type: 'response',
+      result: 200,
+      message: 'OK',
+      params: { data: { mute: true, power: true, pre_amp_mode: true, volume_percent: 40 } },
+    }),
+  );
+  assert.equal((await press).success, true);
+  assert.equal(fake.state.zone.mute, true, 'muted, from the real state');
+});
+
+test('M2 every frame counts for the flood guard, unknown paths and junk included', async (t) => {
+  const {
+    gladys,
+    device: fake,
+    app,
+  } = await setup(t, {
+    timings: { floodMessages: 20, floodWindow: 10_000 },
+  });
+  await createDevice(gladys);
+  const link = [...app.links.values()][0];
+  const failures = link.failures;
+  for (let i = 0; i < 30; i += 1) {
+    fake.broadcast(i % 2 ? 'junk' : JSON.stringify({ path: '/unknown', params: { data: {} } }));
+  }
+  await waitFor(() => link.failures > failures, 'the flood closed the socket');
+});
+
+test('M3 mDNS answers: local network addresses only', async (t) => {
+  for (const ok of [
+    '10.1.2.3',
+    '172.16.0.9',
+    '172.31.255.1',
+    '192.168.1.40',
+    '169.254.3.4',
+    '100.64.0.1',
+  ]) {
+    assert.equal(isLanAddress(ok), true, ok);
+  }
+  for (const bad of [
+    '8.8.8.8',
+    '169.254.169.254',
+    '127.0.0.1',
+    '0.0.0.0',
+    '255.255.255.255',
+    '192.168.1.255',
+    '224.0.0.251',
+    '172.32.0.1',
+    '100.128.0.1',
+    'fe80::1',
+    'cxn.local',
+    null,
+  ]) {
+    assert.equal(isLanAddress(bad), false, String(bad));
+  }
+  const asked = [];
+  const { app } = await setup(t, {
+    config: { addresses: '' },
+    identify: async ({ address }) => {
+      asked.push(address.host);
+      throw new Error('no');
+    },
+    scanResults: {
+      mdns: [
+        {
+          name: 'x',
+          host: 'x.local',
+          addresses: ['8.8.8.8', '169.254.169.254', '127.0.0.1', '192.168.1.40', '0.0.0.0'],
+          port: 80,
+          txt: [],
+        },
+      ],
+    },
+  });
+  await app.findDevices();
+  assert.deepEqual(asked, ['192.168.1.40']);
+});
+
+test('M4 reconnections to Gladys never make an unreachable address asked faster', async (t) => {
+  let attempts = 0;
+  const { gladys, app } = await setup(t, {
+    config: { addresses: '127.0.0.1:9' },
+    timings: { reconnectBase: 300, reconnectMax: 5_000 },
+    createSocket: (url, options) => {
+      attempts += 1;
+      return createWebSocket(url, options);
+    },
+  });
+  const started = Date.now();
+  while (Date.now() - started < 1_500) {
+    await app.start(await gladys.getConfig(), { connected: true });
+    await settle(20);
+  }
+  // 0, 300, 900 ms: the backoff alone, whatever the reconnections.
+  assert.ok(attempts <= 3, `${attempts} attempts`);
+});
+
+test('M5 standby and mute go before the commands waiting', async (t) => {
+  const { gladys, device: fake } = await setup(t, { deviceOptions: { delay: 150 } });
+  const device = await createDevice(gladys);
+  const first = set(gladys, device, 'volume', 10);
+  await settle(20);
+  const second = set(gladys, device, 'volume', 20);
+  await settle(5);
+  const mute = set(gladys, device, 'mute');
+  await settle(5);
+  const standby = set(gladys, device, 'standby');
+  const acks = await Promise.all([first, second, mute, standby]);
+  assert.ok(
+    acks.every((a) => a.success),
+    JSON.stringify(acks),
+  );
+  assert.deepEqual(
+    fake.commands.map((c) => Object.keys(c.params).find((k) => k !== 'zone')),
+    ['volume_percent', 'mute', 'power', 'volume_percent'],
+  );
 });

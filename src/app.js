@@ -31,6 +31,34 @@ const BUTTONS = new Set([
 ]);
 
 /**
+ * Whether an address announced by mDNS may be connected to: an IPv4 address
+ * of a local network (10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16 but
+ * the cloud metadata address 169.254.169.254). Public, loopback, "this
+ * network" (0/8), broadcast and multicast addresses are never asked. The
+ * addresses typed by the user are not filtered: they are the user's choice.
+ */
+export function isLanAddress(host) {
+  if (typeof host !== 'string' || isIP(host) !== 4) {
+    return false;
+  }
+  const [a, b, c, d] = host.split('.').map(Number);
+  // The metadata address, and the broadcast of a /24 or larger (x.x.x.255).
+  if (host === '169.254.169.254' || d === 255 || (a === 255 && b === 255 && c === 255)) {
+    return false;
+  }
+  return (
+    a === 10 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
+}
+
+/** Commands that go before the ones waiting: quieting down never waits behind the rest. */
+const URGENT = new Set([FEATURES.STANDBY, FEATURES.MUTE]);
+
+/**
  * The volume of a command, validated strictly: an integer 0..100 given as a
  * number or as a string of digits. null, '', true, 12.5, '12abc' are refused.
  * @returns {number | undefined}
@@ -133,7 +161,10 @@ export class CambridgeAudioApp {
       }
     }
     await this.step('read the Gladys devices', () => this.refreshCreated());
-    await this.step('open the links', () => this.syncLinks({ retry: true }));
+    // A configuration save asks the silent links again (never sooner than the
+    // base interval); a reconnection to Gladys does not: Gladys flapping must
+    // never make the devices asked faster.
+    await this.step('open the links', () => this.syncLinks({ retry: !connected }));
     await this.step('publish the devices', () => this.publishDevices());
     await this.step('publish the states', () => this.publishAllStates());
     await this.step('publish the status', () => this.updateStatus());
@@ -199,14 +230,43 @@ export class CambridgeAudioApp {
     }
   }
 
-  enqueue(unitId, task) {
-    const previous = this.queues.get(unitId) ?? Promise.resolve();
-    const run = previous.then(task, task);
-    this.queues.set(
-      unitId,
-      run.catch(() => {}),
-    );
-    return run;
+  /**
+   * The command queue of one device: one command at a time. An `urgent`
+   * command (standby, mute) goes before the commands still waiting (after
+   * the other urgent ones), never before the one already running.
+   */
+  enqueue(unitId, task, { urgent = false } = {}) {
+    let queue = this.queues.get(unitId);
+    if (!queue) {
+      queue = { running: false, items: [] };
+      this.queues.set(unitId, queue);
+    }
+    return new Promise((resolve, reject) => {
+      const item = { task, resolve, reject, urgent };
+      if (urgent) {
+        const index = queue.items.findIndex((i) => !i.urgent);
+        queue.items.splice(index === -1 ? queue.items.length : index, 0, item);
+      } else {
+        queue.items.push(item);
+      }
+      this.drain(queue);
+    });
+  }
+
+  async drain(queue) {
+    if (queue.running) {
+      return;
+    }
+    queue.running = true;
+    while (queue.items.length > 0) {
+      const item = queue.items.shift();
+      try {
+        item.resolve(await item.task());
+      } catch (err) {
+        item.reject(err);
+      }
+    }
+    queue.running = false;
   }
 
   // --- Known devices -----------------------------------------------------------
@@ -565,7 +625,7 @@ export class CambridgeAudioApp {
     for (const result of (Array.isArray(results) ? results : []).slice(0, 50)) {
       // The websocket is on port 80, whatever port the announced service has.
       const hosts = (Array.isArray(result?.addresses) ? result.addresses : [])
-        .filter((h) => typeof h === 'string' && isIP(h) === 4 && !seen.has(h))
+        .filter((h) => isLanAddress(h) && !seen.has(h))
         .slice(0, 4);
       hosts.forEach((h) => seen.add(h));
       if (hosts.length > 0) {
@@ -660,14 +720,18 @@ export class CambridgeAudioApp {
     // Set just before a command message leaves: from then on, it may have
     // reached the device, whatever happens next.
     const context = { mayHaveSent: false };
-    const run = this.enqueue(device.unitId, async () => {
-      if (late || this.remaining(started) < 50) {
-        // Gladys stopped waiting while this command was queued: dropped, never sent late.
-        late = true;
-        throw new DeviceError(ERROR_KINDS.BUDGET, 'No time left for this command, nothing sent');
-      }
-      return this.command(device, key, checked, started, context);
-    });
+    const run = this.enqueue(
+      device.unitId,
+      async () => {
+        if (late || this.remaining(started) < 50) {
+          // Gladys stopped waiting while this command was queued: dropped, never sent late.
+          late = true;
+          throw new DeviceError(ERROR_KINDS.BUDGET, 'No time left for this command, nothing sent');
+        }
+        return this.command(device, key, checked, started, context);
+      },
+      { urgent: URGENT.has(key) },
+    );
     // Wall-clock deadline (not the injectable timers): the ack Gladys waits for.
     let timer;
     const deadline = new Promise((resolve, reject) => {
@@ -747,12 +811,8 @@ export class CambridgeAudioApp {
   async command(device, key, value, started, context) {
     const link = this.connectedLink(device);
     if (!link) {
-      if (key === FEATURES.STANDBY) {
-        // Not connected: in eco standby, off or unreachable. Nothing is
-        // sent, and nothing else is wanted from a standby button.
-        this.logger.info(`${deviceName(device)} is not connected: already in standby or off`);
-        return undefined;
-      }
+      // Standby included: a device just disconnected may still be on, so
+      // "already in standby" would be a guess. Nothing sent, said so.
       throw new DeviceError(
         ERROR_KINDS.UNREACHABLE,
         device.host
@@ -762,9 +822,19 @@ export class CambridgeAudioApp {
     }
     const send = (message) => this.send(device, link, message, started, context);
     switch (key) {
-      case FEATURES.POWER_ON:
+      case FEATURES.POWER_ON: {
         await send(COMMANDS.powerOn());
+        // A device wakes up at the volume it had: brought back to the cap.
+        // Within what is left of this command first, then in the background
+        // while the device is still waking up. The ack never depends on it.
+        const done = await this.capVolume(device, link, () =>
+          Math.min(this.timings.preRead, this.remaining(started) - 100),
+        ).catch(() => false);
+        if (!done) {
+          this.capAfterWake(device, 1);
+        }
         return undefined;
+      }
       case FEATURES.STANDBY:
         await send(COMMANDS.standby());
         return undefined;
@@ -792,6 +862,20 @@ export class CambridgeAudioApp {
         );
         if (typeof zone?.mute !== 'boolean') {
           throw new Error(`${deviceName(device)}: mute state unknown, nothing sent`);
+        }
+        if (zone.mute && zone.preAmp === true) {
+          // Unmuting never makes the device play above the cap: the volume
+          // read with the mute decides, and is lowered first when above it.
+          if (!Number.isInteger(zone.volume)) {
+            throw new Error(`${deviceName(device)}: volume unknown, nothing sent`);
+          }
+          const cap = this.config.maxVolume;
+          if (zone.volume > cap) {
+            this.logger.info(
+              `${deviceName(device)}: volume ${zone.volume} lowered to ${cap} before unmuting`,
+            );
+            await send(COMMANDS.setVolume(cap));
+          }
         }
         await send(COMMANDS.setMute(!zone.mute));
         return undefined;
@@ -838,16 +922,79 @@ export class CambridgeAudioApp {
     const play = parsePlayState(
       await this.readBefore(device, link, 'Play state', PATHS.PLAY_STATE, started),
     );
-    if (!play?.state) {
-      throw new Error(`${deviceName(device)}: play state unknown, nothing sent`);
-    }
-    const playing = play.state === 'play';
-    if ((action === 'play') === playing) {
-      // Already as asked: nothing to send.
+    const state = play?.state;
+    // The toggle only from a state where it surely does what was asked:
+    // Play from pause or stop, Pause from play. Already as asked: nothing to
+    // send. Anything else (connecting, buffering, ready, NETWORK, unknown):
+    // refused, the toggle could do anything.
+    const toggleFrom = action === 'play' ? ['pause', 'stop'] : ['play'];
+    const nothingFrom = action === 'play' ? ['play'] : ['pause', 'stop'];
+    if (nothingFrom.includes(state)) {
       return undefined;
+    }
+    if (!toggleFrom.includes(state)) {
+      throw new Error(`${deviceName(device)}: play state ${state ?? 'unknown'}, nothing sent`);
     }
     await send(COMMANDS.toggle());
     return undefined;
+  }
+
+  /**
+   * Reads `/zone/state` and lowers the volume to the cap when the device is
+   * on, controls its volume and is above the cap. True when settled (lowered,
+   * or nothing to lower), false when the device cannot tell yet (waking up).
+   */
+  async capVolume(device, link, budget) {
+    if (budget() <= 0 || !link.connected) {
+      return false;
+    }
+    const zone = parseZoneState(await link.request(PATHS.ZONE_STATE, {}, budget()));
+    if (zone?.power !== true) {
+      return false;
+    }
+    if (zone.preAmp !== true) {
+      return true;
+    }
+    if (!Number.isInteger(zone.volume)) {
+      return false;
+    }
+    const cap = this.config.maxVolume;
+    if (zone.volume <= cap) {
+      return true;
+    }
+    if (budget() <= 0) {
+      return false;
+    }
+    this.logger.info(`${deviceName(device)}: woke up at volume ${zone.volume}, lowered to ${cap}`);
+    await link.request(...COMMANDS.setVolume(cap), budget());
+    return true;
+  }
+
+  /** After a Power on: the cap checked again every `wakeCheckDelay`, `wakeChecks` times at most. */
+  capAfterWake(device, attempt) {
+    if (attempt > this.timings.wakeChecks) {
+      this.logger.info(`${deviceName(device)}: volume not confirmed after waking up`);
+      return;
+    }
+    const generation = this.generation;
+    this.timers.setTimeout(() => {
+      if (generation !== this.generation) {
+        return;
+      }
+      this.enqueue(device.unitId, async () => {
+        const link = this.connectedLink(device);
+        if (!link) {
+          return false;
+        }
+        return this.capVolume(device, link, () => this.timings.preRead);
+      })
+        .catch(() => false)
+        .then((done) => {
+          if (!done) {
+            this.capAfterWake(device, attempt + 1);
+          }
+        });
+    }, this.timings.wakeCheckDelay);
   }
 
   // --- Device lifecycle --------------------------------------------------------------

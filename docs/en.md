@@ -51,7 +51,15 @@ The volume asked from Gladys (dashboard, scene, voice assistant) never goes
 above the cap of the configuration: a higher volume is set to the cap. The
 cap is read again just before sending: a new value saved applies at once. The
 volume set on the device itself (knob, remote, app) is not changed by the
-integration.
+integration, except in the two cases where Gladys would make it heard:
+
+- **Unmute**: when the volume of the device is above the cap, it is set to
+  the cap first, then the mute is removed. When the volume cannot be read,
+  nothing is sent.
+- **Power on**: after the wake-up, the volume is read again and set to the
+  cap when above it. When the device is slow to wake up, the integration
+  checks again every 1.5 s for about 15 s; after that the volume is not
+  corrected (the device resumes the volume it had before standby).
 
 When the pre-amplifier of the device is off (a streamer plugged into another
 amplifier), the volume is neither shown nor set: set it on the amplifier.
@@ -73,7 +81,13 @@ amplifier), the volume is neither shown nor set: set it on the amplifier.
 Every command is answered within 4 seconds (Gladys waits 5 seconds). A
 command that left for the device without confirmation is reported "sent,
 without confirmation"; the state pushed by the device then shows what it
-did. A command that could not leave is reported "nothing sent".
+did. A command that could not leave is reported "nothing sent": so is any
+command, Standby included, to a device that is not connected. Standby and
+mute go before the commands waiting.
+
+When the source only offers the play/pause toggle, Play acts only when paused
+or stopped, Pause only when playing; in an in-between state (connecting,
+buffering…), the command is refused and nothing is sent.
 
 ## Configuration buttons
 

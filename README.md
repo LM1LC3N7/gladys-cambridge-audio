@@ -39,7 +39,9 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (CambridgeAudioApp)
   dropdown options), the volume capped by `max_volume` (read just before
   sending), serialized per device, each within a 3.5 s budget (Gladys acks in
   5 s), dropped when they cannot start in time. Mute is a press: the state is
-  read just before and the explicit value sent. Play and pause use the
+  read just before and the explicit value sent; unmuting (and Power on)
+  first brings a volume above the cap back to it. Standby and mute go before
+  the commands waiting. Play and pause use the
   explicit action, or the toggle only after the play state read again says it
   is needed. A message that may have reached the device is reported "sent,
   without confirmation".

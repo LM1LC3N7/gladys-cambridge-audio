@@ -56,6 +56,8 @@ export function openSession({
   timeoutMs,
   onMessage,
   onClose,
+  onFrame,
+  staleMs,
   createSocket = createWebSocket,
 }) {
   return new Promise((resolve, reject) => {
@@ -96,16 +98,20 @@ export function openSession({
         return;
       }
       settled = true;
-      resolve(new Session(socket, { onMessage, onClose }));
+      resolve(new Session(socket, { onMessage, onClose, onFrame, staleMs }));
     });
   });
 }
 
 export class Session {
-  constructor(socket, { onMessage, onClose } = {}) {
+  constructor(socket, { onMessage, onClose, onFrame, staleMs = 2_000 } = {}) {
     this.socket = socket;
     this.onMessage = onMessage;
     this.onClose = onClose;
+    this.onFrame = onFrame;
+    this.staleMs = staleMs;
+    /** path -> until when the first answer on it is a late one (dropped) */
+    this.stale = new Map();
     /** path -> [{ resolve, reject, timer }] */
     this.pending = new Map();
     this.pendingCount = 0;
@@ -126,7 +132,10 @@ export class Session {
   }
 
   receive(data, isBinary) {
-    if (isBinary) {
+    // Every frame is counted, before any parsing: a flood of junk, binary
+    // frames or unknown paths is seen as a flood too.
+    this.onFrame?.(this);
+    if (this.closed || isBinary) {
       return;
     }
     let message;
@@ -140,6 +149,16 @@ export class Session {
     }
     const { path } = message;
     if (message.type === 'response') {
+      // The late answer of a request that timed out would settle the next
+      // request on the same path with an old state: the first answer within
+      // `staleMs` after a timeout is dropped, data included.
+      const staleUntil = this.stale.get(path);
+      if (staleUntil !== undefined) {
+        this.stale.delete(path);
+        if (Date.now() < staleUntil) {
+          return;
+        }
+      }
       // As aiostreammagic: an answer settles every request waiting on its path.
       const waiting = this.pending.get(path) ?? [];
       this.pending.delete(path);
@@ -206,6 +225,7 @@ export class Session {
             this.pending.delete(path);
           }
         }
+        this.stale.set(path, Date.now() + this.staleMs);
         reject(
           new DeviceError(ERROR_KINDS.TIMEOUT, 'Sent, without answer from the device', {
             sent: true,
