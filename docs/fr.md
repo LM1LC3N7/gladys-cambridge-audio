@@ -1,67 +1,98 @@
-# Template de démonstration
+# Cambridge Audio (StreamMagic) pour Gladys
 
-Ceci est la documentation utilisateur de l'intégration. Gladys ré-héberge ce
-fichier et affiche un lien **Documentation** permanent vers lui dans l'écran
-de configuration (dans la langue de l'utilisateur, avec l'anglais en repli) —
-c'est au moment de configurer que l'utilisateur en a le plus besoin. Gardez
-les courtes indications d'accueil dans les blocs `section` du `config_schema`
-du manifest ; mettez ici le pas-à-pas détaillé (captures d'écran, dépannage…).
+Pilotez vos amplis et streamers **Cambridge Audio** équipés de **StreamMagic**
+(CXN, MXN, EVO, CXA, AXN, Edge…) depuis Gladys, en local, sans aucun cloud :
+allumage, veille, volume, sourdine, source, lecture, pause, suivant,
+précédent et titre en cours.
+
+> **Important.** Cette intégration n'a jamais été testée avec un vrai appareil :
+> elle a été écrite d'après la bibliothèque `aiostreammagic` (celle de Home
+> Assistant) et testée avec un faux appareil seulement. Vos retours sont les
+> bienvenus. Intégration non officielle, sans lien avec Cambridge Audio.
+
+## Installation
+
+1. Donnez à chaque appareil une **adresse IP fixe** dans votre box (bail DHCP
+   réservé).
+2. Dans Gladys, installez l'intégration **Cambridge Audio**, puis ouvrez sa
+   configuration.
+3. Saisissez les adresses IP, séparées par des virgules (par exemple
+   `192.168.1.40, 192.168.1.41`). Le bouton **Chercher les appareils** peut
+   aussi les trouver sur le réseau (mDNS, facultatif : la recherche ne
+   traverse pas tous les réseaux).
+4. Choisissez le **plafond de volume** (50 % par défaut).
+5. Les appareils apparaissent dans l'onglet **Découverte** : créez-les.
+
+L'intégration garde une connexion websocket ouverte avec chaque appareil
+(`ws://<ip>/smoip`, port 80) : les changements faits sur l'appareil, sa
+télécommande ou l'application StreamMagic arrivent tout de suite dans Gladys.
 
 ## Ce que vous obtenez
 
-Six appareils de démonstration apparaissent après l'installation : une
-station météo (vraies données Open-Meteo), un interrupteur, une lampe
-variable, une prise connectée avec mesure de puissance, un détecteur de
-mouvement et une caméra.
+| Fonction           | Type Gladys                    | Remarque                                                      |
+| ------------------ | ------------------------------ | ------------------------------------------------------------- |
+| Marche             | état binaire (lecture seule)   | 1 allumé, 0 en veille ou injoignable                          |
+| Allumer            | bouton                         | sort l'appareil de la veille réseau                           |
+| Veille             | bouton                         | met l'appareil en veille réseau                               |
+| Volume             | musique / volume (0 à 100)     | plafonné, seulement si le préampli de l'appareil est activé   |
+| Sourdine           | bouton (télévision / sourdine) | chaque appui lit l'état puis règle l'inverse                  |
+| Lecture, pause     | boutons musique                | l'action explicite, ou la bascule seulement si elle est utile |
+| Suivant, précédent | boutons musique                |                                                               |
+| Lecture en cours   | état musique (lecture seule)   | 1 en lecture, 0 sinon                                         |
+| Source             | liste                          | les sources de l'appareil ; la liste ne fait que grandir      |
+| Titre              | texte (lecture seule)          | « Artiste - Titre » (ou la station) ; « — » sans lecture      |
 
-## Configuration
+Volontairement, aucun **interrupteur** : un « éteins tout » ou « allume
+tout » d'un assistant vocal ou d'une scène ne réveille ni ne coupe votre ampli.
 
-1. Ouvrez l'onglet **Configuration** de l'intégration.
-2. Renseignez la **latitude** et la **longitude** que la station météo de
-   démonstration doit observer (Paris par défaut), et choisissez votre unité
-   de température. L'**intervalle de rafraîchissement** règle la fréquence
-   de lecture de la station météo et de la puissance de la prise : toutes
-   les 5 minutes par défaut, toutes les minutes au plus.
-3. Enregistrez : les appareils apparaissent dans l'onglet **Découverte**,
-   prêts à être ajoutés.
+## Plafond de volume
 
-Le réglage **Préférer la connexion locale** pilote la prise de
-démonstration : elle affiche en badge le canal réellement utilisé (local ou
-cloud), avec un point orange quand elle fonctionne en mode dégradé (local
-refusé, bascule cloud).
+Le volume demandé depuis Gladys (tableau de bord, scène, assistant vocal) ne
+dépasse jamais le plafond de la configuration : un volume plus fort est ramené
+au plafond. Le plafond est relu juste avant l'envoi : une nouvelle valeur
+enregistrée s'applique tout de suite. Le volume réglé sur l'appareil lui-même
+(bouton, télécommande, application) n'est pas modifié par l'intégration.
 
-## Actions
+Si le préampli de l'appareil est désactivé (streamer branché sur un autre
+ampli), le volume n'est ni affiché ni réglable : il se règle sur l'ampli.
 
-- **Tester le fournisseur météo** — effectue une requête en direct vers
-  Open-Meteo et affiche la température et l'humidité actuelles sous le
-  bouton.
-- **Identifier un appareil** — choisissez un de vos appareils dans la liste
-  et il se signale (la lampe de démonstration « clignote » dans les logs).
+## Veille et reconnexion
 
-## Scènes
+- En **veille réseau**, l'appareil reste joignable : l'état Marche passe à 0
+  et le bouton Allumer le réveille.
+- En **veille éco**, l'appareil quitte le réseau : il est affiché éteint, cité
+  dans le statut de l'intégration, et l'intégration réessaie de s'y connecter
+  à intervalles espacés (10 s, puis le double à chaque échec, jusqu'à 5
+  minutes). Le bouton Allumer ne peut rien dans ce cas.
+- Si un autre appareil répond à l'adresse d'un appareil créé (adresse
+  changée), son adresse est oubliée et une recherche se lance d'elle-même
+  toutes les 10 minutes ; vous pouvez aussi saisir la nouvelle adresse.
 
-L'intégration ajoute ses propres cartes à l'éditeur de scènes (Gladys 5.1
-ou plus récent), dans la catégorie **Intégrations** :
+## Commandes
 
-- **Mouvement détecté** (déclencheur) — lance la scène quand un détecteur
-  de démonstration voit bouger quelque chose. Choisissez éventuellement le
-  détecteur et ce qui a bougé (personne, animal) ; laissés vides, toute
-  détection correspond. Les actions suivantes peuvent lire ce qui a bougé
-  avec `{{triggerEvent.data.target}}`.
-- **Identifier un appareil** (action) — fait se signaler l'appareil choisi.
-  Elle indique si l'appareil a pu se signaler, pour que les actions
-  suivantes puissent en dépendre.
+Chaque commande reçoit une réponse en moins de 4 secondes (Gladys attend 5
+secondes). Une commande partie vers l'appareil sans confirmation est signalée
+« envoyée, sans confirmation » ; l'état poussé par l'appareil montre ensuite
+ce qu'il a fait. Une commande qui n'a pas pu partir est signalée « rien
+envoyé ».
 
-## Tableau de bord
+## Boutons de la configuration
 
-Ajoutez le widget **État de la démo** à un tableau de bord : il affiche en
-direct la température de la station météo et la puissance de la prise du
-bureau, la connexion utilisée par la prise (en orange si dégradée) et la
-position observée. Son bouton **Identifier la lampe** fait se signaler la
-lampe de démonstration.
+- **Chercher les appareils** : recherche mDNS par Gladys, puis les adresses
+  saisies.
+- **Vérifier les appareils** : l'état de connexion, la marche et le volume de
+  chaque appareil, et le plafond en vigueur.
 
-## Dépannage
+## Données et confidentialité
 
-L'intégration journalise tout ce qu'elle fait : consultez les logs de
-l'intégration depuis l'interface Gladys (ou `docker logs` sur l'hôte) avec
-`LOG_LEVEL=debug` pour le détail complet.
+L'intégration ne demande ni compte ni mot de passe : le websocket StreamMagic
+n'en a pas. Elle garde dans `/data/cambridge-audio.json` la liste des
+appareils connus (identifiant, adresse, nom, modèle, sources). Rien ne sort de
+votre réseau local.
+
+## Limites connues
+
+- Une seule zone (`ZONE1`), comme l'application StreamMagic.
+- Pas encore de préréglages (presets), de radio, d'égaliseur, de balance, de
+  luminosité de l'afficheur ni de répétition / aléatoire.
+- Jamais testé avec un vrai appareil : les réponses réelles peuvent différer.

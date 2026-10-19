@@ -1,61 +1,96 @@
-# Demo Devices Template
+# Cambridge Audio (StreamMagic) for Gladys
 
-This is the user documentation of the integration. Gladys re-hosts this file
-and shows a permanent **Documentation** link to it in the Configuration screen
-(in the user's language, with English as the fallback) — it is when
-configuring that the user needs it most. Keep the short onboarding hints in
-the `section` blocks of the manifest `config_schema`; put the long
-step-by-step (screenshots, troubleshooting…) here.
+Control your **Cambridge Audio** amplifiers and streamers with **StreamMagic**
+(CXN, MXN, EVO, CXA, AXN, Edge…) from Gladys, locally, without any cloud:
+power on, standby, volume, mute, source, play, pause, next, previous and the
+title playing.
+
+> **Important.** This integration has never been tested with a real device:
+> it was written from the `aiostreammagic` library (the one Home Assistant
+> uses) and tested against a fake device only. Your feedback is welcome.
+> Unofficial integration, not affiliated with Cambridge Audio.
+
+## Setup
+
+1. Give each device a **fixed IP address** in your router (reserved DHCP
+   lease).
+2. In Gladys, install the **Cambridge Audio** integration, then open its
+   configuration.
+3. Type the IP addresses, separated by commas (for example
+   `192.168.1.40, 192.168.1.41`). The **Find the devices** button can also
+   look for them on the network (mDNS, optional: the search cannot cross
+   every network).
+4. Choose the **volume cap** (50 % by default).
+5. The devices appear in the **Discovery** tab: create them.
+
+The integration keeps a websocket open with each device (`ws://<ip>/smoip`,
+port 80): changes made on the device, its remote or the StreamMagic app show
+in Gladys right away.
 
 ## What you get
 
-Six demo devices show up after installation: a weather station (real data
-from Open-Meteo), a switch, a dimmable light, a smart plug with power
-metering, a motion sensor and a camera.
+| Feature        | Gladys type                | Note                                                      |
+| -------------- | -------------------------- | --------------------------------------------------------- |
+| Power          | binary state (read only)   | 1 on, 0 in standby or unreachable                         |
+| Power on       | button                     | wakes the device from network standby                     |
+| Standby        | button                     | puts the device in network standby                        |
+| Volume         | music / volume (0 to 100)  | capped, only when the pre-amplifier of the device is on   |
+| Mute           | button (television / mute) | each press reads the state, then sets the opposite        |
+| Play, pause    | music buttons              | the explicit action, or the toggle only when it is needed |
+| Next, previous | music buttons              |                                                           |
+| Playback       | music state (read only)    | 1 playing, 0 otherwise                                    |
+| Source         | dropdown                   | the sources of the device; the list only grows            |
+| Now playing    | text (read only)           | "Artist - Title" (or the station); "—" when nothing plays |
 
-## Configuration
+On purpose, no **switch**: an "everything off" or "everything on" from a
+voice assistant or a scene neither wakes nor cuts your amplifier.
 
-1. Open the **Configuration** tab of the integration.
-2. Set the **latitude** and **longitude** the demo weather station should
-   observe (they default to Paris), and pick your temperature unit.
-   The **refresh interval** sets how often the weather station and the
-   plug's power are read: every 5 minutes by default, every minute at most.
-3. Save: the devices appear in the **Discovery** tab, ready to be added.
+## Volume cap
 
-The **Prefer the local connection** toggle drives the demo plug: it reports
-the channel it actually uses as a badge (local or cloud), with an orange dot
-when it runs degraded (local refused, cloud fallback).
+The volume asked from Gladys (dashboard, scene, voice assistant) never goes
+above the cap of the configuration: a higher volume is set to the cap. The
+cap is read again just before sending: a new value saved applies at once. The
+volume set on the device itself (knob, remote, app) is not changed by the
+integration.
 
-## Actions
+When the pre-amplifier of the device is off (a streamer plugged into another
+amplifier), the volume is neither shown nor set: set it on the amplifier.
 
-- **Test the weather provider** — performs a live request to Open-Meteo and
-  shows the current temperature and humidity under the button.
-- **Identify a device** — pick one of your devices in the list and it will
-  signal itself (the demo light "blinks" in the logs).
+## Standby and reconnection
 
-## Scenes
+- In **network standby**, the device stays reachable: Power goes to 0 and the
+  Power on button wakes it up.
+- In **eco standby**, the device leaves the network: it shows as off, is named
+  in the integration status, and the integration tries to connect again at
+  spaced intervals (10 s, then doubled after each failure, up to 5 minutes).
+  The Power on button cannot do anything then.
+- When another device answers at the address of a created one (address
+  changed), its address is forgotten and a search runs by itself every 10
+  minutes; you can also type the new address.
 
-The integration adds its own cards to the scene editor (Gladys 5.1 or
-later), under the **Integrations** category:
+## Commands
 
-- **Motion detected** (trigger) — starts the scene when a demo motion sensor
-  sees something move. Optionally pick the sensor and what moved (person,
-  animal); left empty, any detection matches. The following actions can
-  read what moved with `{{triggerEvent.data.target}}`.
-- **Identify a device** (action) — makes the chosen device signal itself.
-  It returns whether the device could signal itself, so the following
-  actions can depend on it.
+Every command is answered within 4 seconds (Gladys waits 5 seconds). A
+command that left for the device without confirmation is reported "sent,
+without confirmation"; the state pushed by the device then shows what it
+did. A command that could not leave is reported "nothing sent".
 
-## Dashboard
+## Configuration buttons
 
-Add the **Demo status** widget to a dashboard: it shows the live
-temperature of the weather station and the power of the office plug, the
-connection the plug currently uses (orange when degraded) and the observed
-location. Its **Identify the light** button makes the demo light signal
-itself.
+- **Find the devices**: mDNS search through Gladys, then the typed addresses.
+- **Check the devices**: the connection, power and volume of each device, and
+  the cap in force.
 
-## Troubleshooting
+## Data and privacy
 
-The integration logs everything it does: check the integration logs from the
-Gladys UI (or `docker logs` on the host) with `LOG_LEVEL=debug` for the full
-detail.
+The integration asks for no account and no password: the StreamMagic
+websocket has none. It keeps in `/data/cambridge-audio.json` the list of the
+known devices (id, address, name, model, sources). Nothing leaves your local
+network.
+
+## Known limits
+
+- One zone (`ZONE1`), as the StreamMagic app.
+- No presets, radio, equalizer, balance, display brightness, repeat or
+  shuffle yet.
+- Never tested with a real device: the real answers may differ.
