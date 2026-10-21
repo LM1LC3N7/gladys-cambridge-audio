@@ -61,9 +61,11 @@ integration, except in the two cases where Gladys would make it heard:
 - **Power on**: after the wake-up, the volume is read again and set to the
   cap when above it. When the device is slow to wake up, or does not confirm
   the lowering, the integration checks again every 2.5 s for about 15 s; a
-  volume turned up above the cap during those 15 s is lowered too. After
-  that, or after a Standby, the volume is not corrected (the device resumes
-  the volume it had before standby).
+  volume turned up above the cap during those 15 s is lowered too (also when
+  the device was already on). A Standby pressed meanwhile does not stop
+  these checks: they only lower the volume of a device that says it is on.
+  After those 15 s, the volume is not corrected (the device resumes the
+  volume it had before standby).
 
 When the pre-amplifier of the device is off (a streamer plugged into another
 amplifier), the volume is neither shown nor set: set it on the amplifier.
@@ -84,7 +86,10 @@ amplifier), the volume is neither shown nor set: set it on the amplifier.
 
 Every command is answered within 4 seconds (Gladys waits 5 seconds). Power
 on, standby, volume, mute and source are confirmed only when the device gives
-back the value asked (a device can accept a message and ignore it); a command
+back the value asked (a device can accept a message and ignore it): Power on
+waits for the wake-up up to the end of the 4 seconds; Standby counts only a
+state read after it, and never while a device is still waking up from a
+Power on (it says "off" too). A command
 that left for the device without that confirmation is reported "sent,
 without confirmation", and the state pushed by the device then shows what it
 did. A command that could not leave is reported "nothing sent": so is any

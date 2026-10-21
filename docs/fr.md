@@ -62,9 +62,11 @@ dans deux cas où Gladys le rendrait audible :
 - **Allumer** : après le réveil, le volume est relu et ramené au plafond s'il
   le dépasse. Si l'appareil met du temps à se réveiller, ou ne confirme pas
   la baisse, l'intégration revérifie toutes les 2,5 s pendant 15 s environ ;
-  un volume monté au-dessus du plafond pendant ces 15 s est aussi ramené.
-  Au-delà, ou après une Veille, le volume n'est pas corrigé (l'appareil
-  reprend le volume qu'il avait avant sa veille).
+  un volume monté au-dessus du plafond pendant ces 15 s est aussi ramené
+  (même si l'appareil était déjà allumé). Une Veille appuyée entre-temps
+  n'arrête pas ces vérifications : elles ne font que baisser le volume d'un
+  appareil qui se dit allumé. Au-delà de ces 15 s, le volume n'est pas
+  corrigé (l'appareil reprend le volume qu'il avait avant sa veille).
 
 Si le préampli de l'appareil est désactivé (streamer branché sur un autre
 ampli), le volume n'est ni affiché ni réglable : il se règle sur l'ampli.
@@ -86,7 +88,10 @@ ampli), le volume n'est ni affiché ni réglable : il se règle sur l'ampli.
 Chaque commande reçoit une réponse en moins de 4 secondes (Gladys attend 5
 secondes). Allumer, Veille, volume, sourdine et source ne sont confirmés que
 quand l'appareil renvoie la valeur demandée (un appareil peut accepter un
-message et l'ignorer) ; une commande partie vers l'appareil sans cette
+message et l'ignorer) : Allumer attend le réveil jusqu'à la fin des 4
+secondes ; Veille ne compte qu'un état lu après elle, et jamais pendant
+qu'un appareil se réveille d'un Allumer (il se dit éteint lui aussi). Une
+commande partie vers l'appareil sans cette
 confirmation est signalée « envoyée, sans confirmation », et l'état poussé
 par l'appareil montre ensuite ce qu'il a fait. Une commande qui n'a pas pu
 partir est signalée « rien envoyé » : c'est le cas de toute commande, Veille

@@ -31,7 +31,11 @@ up to date at the end of every milestone.
       volume pushed above the cap during the wake-up window is lowered;
       commands confirmed by value; Standby outside the queue, cancelling the
       waking commands still waiting. Tests C1 to C5 (the fake device can
-      accept a command and ignore it: `ignore`).
+      accept a command and ignore it: `ignore`). Review 1: Standby keeps
+      the cap checks and is confirmed on a fresh state only (C6), Power on
+      waits for the wake-up within its budget (C7), window opened only
+      once Power on may have left (C3); the fake `wakeDelay` no longer
+      pushes `power: true` before the wake-up.
 - [ ] **Milestone 2 — real devices** (testers with a CXN, MXN, EVO, CXA or
       AXN). To check first:
   - the answer to a subscription message (a `response` or nothing), and the
@@ -133,8 +137,8 @@ up to date at the end of every milestone.
 - Queue (review 2026-10-19): Mute goes before the commands still waiting
   (after the other urgent ones), never before the one running.
   (Fix 0.1.2) Standby is not queued: it leaves at once (never behind a read
-  or a confirmation of the command running), counts in `standbySeq`, closes
-  the wake-up window and the check chain, and answers the waking commands
+  or a confirmation of the command running), counts in `standbySeq`, and
+  answers the waking commands
   still queued (power on, source, play, next, previous, as gladys-linn)
   "cancelled by Standby, nothing sent"; a waking command already running
   checks `standbySeq` again right before each message leaves (as NAD
@@ -145,8 +149,13 @@ up to date at the end of every milestone.
   volume (the value sent), mute (the value sent) and source are confirmed
   only by a zone state carrying the value: the state known, else
   `/zone/state` read once, else a pushed update (`DeviceLink.waitState`),
-  within the command budget (Power on: 1.5 s at most, to leave time for the
-  cap); otherwise "Sent, without confirmation from the device". Play,
+  within the command budget (Power on: up to its end, the cap then going
+  through the checks); otherwise "Sent, without confirmation from the
+  device". (Review 1 of 0.1.2) Standby: only a zone state received after
+  its answer counts (`fresh`, `DeviceLink.zoneUpdates`), never the one known
+  before; and while a Power on is waiting for its wake-up (`awaitingWake`:
+  sent within the window, no `power: true` seen since) it is "sent, without
+  confirmation", since a device waking up still says `power: false`. Play,
   pause, next and previous have no value to check: the answer is enough.
 - Cap verified (fix 0.1.2): unmute only once the device gives back a volume
   at or under the cap ("volume not lowered to the cap …, mute kept");
@@ -154,7 +163,14 @@ up to date at the end of every milestone.
   on after a lowering ignored. Wake-up window (`wakeWatch`, as NAD M2):
   from a Power on sent by Gladys, `wakeChecks` × `wakeCheckDelay` (15 s), a
   pushed zone state on, pre-amplifier on, above the cap is lowered through
-  the queue, one at a time (`lowering`); Standby and stop() close it.
+  the queue, one at a time (`lowering`); stop() closes it. (Review 1 of
+  0.1.2) Opened only by a Power on that may have left (closed again when
+  nothing left or the device refused it); a Standby closes neither the
+  window nor the check chain, which only lower the volume of a device that
+  says it is on (a device that ignored the Standby while waking up stays
+  capped, as in 0.1.1); the chain starts whenever the Power on may have
+  left, whatever Standby came after. The window also follows a Power on on
+  a device already on (said in the docs).
 - Late answers (review 2026-10-19): after a request timed out, the first
   `response` on its path within 2 s is dropped (data included), so it never
   settles the next request on that path with an old state. Known limit of

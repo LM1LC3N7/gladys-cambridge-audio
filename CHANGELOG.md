@@ -18,11 +18,15 @@ the notes of the version's GitHub Release.
 - Power on: the volume lowered after the wake-up counts only once the device
   gives it back at or under the cap; otherwise the checks go on.
 - Power on: during the checks after a Power on sent by Gladys (about 15 s), a
-  volume pushed above the cap is brought back to it through the device queue;
-  Standby ends that window.
+  volume pushed above the cap is brought back to it through the device queue.
+  A Standby pressed meanwhile no longer stops these checks (they only lower
+  a device that says it is on), and a Power on refused by the device opens
+  no window.
 - Power on, standby, volume, mute and source are confirmed only by a state
   carrying the value asked, never by the answer `result: 200` alone;
-  otherwise "sent, without confirmation".
+  otherwise "sent, without confirmation". Power on waits for the wake-up
+  within the whole budget; Standby counts only a state read after it, and
+  never while a device is still waking up from a Power on.
 - Standby never waits behind the command running, and the commands still
   waiting that could wake the device (power on, source, play, next,
   previous) are not sent after it ("cancelled by Standby, nothing sent").

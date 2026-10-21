@@ -165,11 +165,15 @@ export async function startFakeDevice({
           return;
         }
         const changed = apply(path, params);
+        const slowWake = path === '/system/power' && params.power === 'ON' && options.wakeDelay > 0;
+        if (slowWake) {
+          // A slow wake-up: on, but the zone says so only after a while
+          // (never `power: true` pushed before that).
+          state.zone.power = false;
+        }
         respond(socket, path, undefined);
         changed.forEach(push);
-        if (path === '/system/power' && params.power === 'ON' && options.wakeDelay > 0) {
-          // A slow wake-up: on, but the zone says so only after a while.
-          state.zone.power = false;
+        if (slowWake) {
           setTimeout(() => {
             state.zone.power = true;
             push('/zone/state');

@@ -60,6 +60,8 @@ export class DeviceLink {
     this.state = {};
     /** The `waitState` calls waiting for a pushed state. */
     this.waiters = new Set();
+    /** Zone states received (read or pushed): tells a fresh state from an older one. */
+    this.zoneUpdates = 0;
   }
 
   get key() {
@@ -251,6 +253,9 @@ export class DeviceLink {
       return;
     }
     this.state = { ...this.state, [field]: parsed };
+    if (field === 'zone') {
+      this.zoneUpdates += 1;
+    }
     for (const waiter of [...this.waiters]) {
       if (waiter.check(this.state)) {
         this.release(waiter, true);

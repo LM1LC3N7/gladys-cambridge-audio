@@ -512,14 +512,16 @@ test('I1 Power on: a device waking up above the cap is brought back to it', asyn
 
 test('I1 Power on: a slow wake-up is checked again in the background', async (t) => {
   const { gladys, device: fake } = await setup(t, {
-    deviceOptions: { wakeDelay: 150 },
-    timings: { wakeCheckDelay: 50, wakeChecks: 10 },
+    deviceOptions: { wakeDelay: 600 },
+    timings: { wakeCheckDelay: 50, wakeChecks: 30, commandBudget: 300 },
   });
   const device = await createDevice(gladys);
   fake.change('zone', { power: false, volume_percent: 85 });
   await settle();
-  assert.equal((await set(gladys, device, 'power_on')).success, true);
-  assert.deepEqual(volumes(fake), [], 'not on yet when the command is answered');
+  const ack = await set(gladys, device, 'power_on');
+  assert.equal(ack.success, false, 'not on yet when the command is answered');
+  assert.match(ack.error, /Sent, without confirmation/);
+  assert.deepEqual(volumes(fake), []);
   await waitFor(() => volumes(fake).length === 1, 'the cap after the wake-up');
   assert.deepEqual(volumes(fake), [50]);
 });
@@ -531,14 +533,15 @@ test('R1 one wake-up check chain per device: a new press starts it over', async 
     app,
   } = await setup(t, {
     deviceOptions: { wakeDelay: 60_000 },
-    timings: { wakeCheckDelay: 100, wakeChecks: 50 },
+    timings: { wakeCheckDelay: 100, wakeChecks: 50, commandBudget: 300 },
   });
   const device = await createDevice(gladys);
   fake.change('zone', { power: false });
   await settle();
-  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  // Still waking up: sent, without confirmation; the checks run anyway.
+  assert.match((await set(gladys, device, 'power_on')).error, /without confirmation/);
   await settle(150);
-  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.match((await set(gladys, device, 'power_on')).error, /without confirmation/);
   assert.equal(app.wakeChecks.size, 1);
   const before = fake.reads.filter((p) => p === '/zone/state').length;
   await settle(1_050);
@@ -553,13 +556,19 @@ test('R1 one wake-up check chain per device: a new press starts it over', async 
 });
 
 test('R2 a wake-up check without answer does not make the next ones drop theirs', async (t) => {
-  const timings = { staleAnswer: 200, wakeCheckDelay: 250, wakeChecks: 6, preRead: 100 };
+  const timings = {
+    staleAnswer: 200,
+    wakeCheckDelay: 250,
+    wakeChecks: 6,
+    preRead: 100,
+    commandBudget: 300,
+  };
   assert.ok(TIMINGS.wakeCheckDelay > TIMINGS.staleAnswer, 'the real timings keep the order');
-  const { gladys, device: fake } = await setup(t, { deviceOptions: { wakeDelay: 100 }, timings });
+  const { gladys, device: fake } = await setup(t, { deviceOptions: { wakeDelay: 400 }, timings });
   const device = await createDevice(gladys);
   fake.change('zone', { power: false, volume_percent: 85 });
   await settle();
-  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.match((await set(gladys, device, 'power_on')).error, /without confirmation/);
   assert.deepEqual(volumes(fake), [], 'still waking up');
   // The first background read is left unanswered (it times out), then the
   // device answers normally: the volume ends at the cap.
@@ -767,8 +776,14 @@ test('C2 wake-up: a lowering the device ignores is not settled, the checks go on
   assert.ok(logs.some((l) => /volume not confirmed after waking up/.test(l)));
 });
 
-test('C3 after Power on, a volume pushed above the cap is lowered; Standby ends that', async (t) => {
-  const { gladys, device: fake } = await setup(t);
+test('C3 after Power on, a volume pushed above the cap is lowered, Standby included', async (t) => {
+  const {
+    gladys,
+    device: fake,
+    app,
+  } = await setup(t, {
+    timings: { wakeCheckDelay: 100, wakeChecks: 6 },
+  });
   const device = await createDevice(gladys);
   fake.change('zone', { power: false, volume_percent: 30 });
   await settle();
@@ -777,11 +792,24 @@ test('C3 after Power on, a volume pushed above the cap is lowered; Standby ends 
   // The volume turned up on the device while it wakes up.
   fake.change('zone', { volume_percent: 90 });
   await waitFor(() => fake.state.zone.volume_percent === 50, 'lowered to the cap');
+  // A Standby does not close the window: the checks only lower a device on.
   assert.equal((await set(gladys, device, 'standby')).success, true);
   fake.change('zone', { power: true, volume_percent: 90 });
+  await waitFor(() => fake.state.zone.volume_percent === 50, 'lowered after Standby too');
+  // After the window (600 ms), the volume set on the device is left alone.
+  await settle(700);
+  fake.change('zone', { volume_percent: 90 });
   await settle(200);
-  assert.equal(fake.state.zone.volume_percent, 90, 'not lowered after Standby');
-  assert.deepEqual(volumes(fake), [50]);
+  assert.equal(fake.state.zone.volume_percent, 90, 'not lowered after the window');
+  assert.deepEqual(volumes(fake), [50, 50]);
+  // A Power on the device refuses opens no window.
+  fake.options.refuse = true;
+  assert.equal((await set(gladys, device, 'power_on')).success, false);
+  fake.options.refuse = false;
+  assert.equal(app.wakeWatch.size, 0);
+  fake.change('zone', { volume_percent: 95 });
+  await settle(200);
+  assert.equal(fake.state.zone.volume_percent, 95, 'nothing done after a refused Power on');
 });
 
 test('C4 a command is confirmed only by the state carrying the value asked', async (t) => {
@@ -832,4 +860,39 @@ test('C5 Standby never waits, and the waking commands queued before it are not s
   await settle(100);
   assert.equal(fake.state.zone.power, false, 'Standby holds');
   assert.ok(!fake.commands.some((c) => 'source' in c.params || c.params.power === 'ON'));
+});
+
+test('C6 Standby ignored by a device waking up: not confirmed, the cap still holds', async (t) => {
+  const { gladys, device: fake } = await setup(t, {
+    deviceOptions: { ignore: ['power'] },
+    timings: { wakeCheckDelay: 300, wakeChecks: 6 },
+  });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  // Power on accepted, the device starts waking up without saying it yet.
+  const powerOn = set(gladys, device, 'power_on');
+  await settle(300);
+  // Standby pressed meanwhile, ignored by the device waking up.
+  const standby = await set(gladys, device, 'standby');
+  assert.equal(standby.success, false, 'never confirmed on the state before Power on');
+  assert.match(standby.error, /Sent, without confirmation/);
+  await settle(200);
+  fake.change('zone', { power: true });
+  await powerOn;
+  await waitFor(() => fake.state.zone.volume_percent === 50, 'the cap after the wake-up');
+  assert.deepEqual(volumes(fake), [50]);
+});
+
+test('C7 a slow wake-up within the budget: Power on confirmed, then capped', async (t) => {
+  const { gladys, device: fake } = await setup(t, { deviceOptions: { wakeDelay: 1_500 } });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  const pressed = Date.now();
+  const ack = await set(gladys, device, 'power_on');
+  assert.equal(ack.success, true, JSON.stringify(ack));
+  assert.ok(Date.now() - pressed >= 1_400, 'waited for the wake-up');
+  await waitFor(() => fake.state.zone.volume_percent === 50, 'the cap');
+  assert.deepEqual(volumes(fake), [50]);
 });
