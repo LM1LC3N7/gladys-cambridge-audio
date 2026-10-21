@@ -29,6 +29,8 @@ export const ERROR_KINDS = Object.freeze({
   PROTOCOL: 'protocol',
   /** No time left for the command: nothing was sent. */
   BUDGET: 'budget',
+  /** Dropped before it left (a Standby asked after it): nothing was sent. */
+  CANCELLED: 'cancelled',
 });
 
 export class DeviceError extends Error {

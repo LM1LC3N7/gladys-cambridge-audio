@@ -710,7 +710,7 @@ test('M4 reconnections to Gladys never make an unreachable address asked faster'
   assert.ok(attempts <= 3, `${attempts} attempts`);
 });
 
-test('M5 standby and mute go before the commands waiting', async (t) => {
+test('M5 standby goes at once, mute before the commands waiting', async (t) => {
   const { gladys, device: fake } = await setup(t, { deviceOptions: { delay: 150 } });
   const device = await createDevice(gladys);
   const first = set(gladys, device, 'volume', 10);
@@ -727,6 +727,109 @@ test('M5 standby and mute go before the commands waiting', async (t) => {
   );
   assert.deepEqual(
     fake.commands.map((c) => Object.keys(c.params).find((k) => k !== 'zone')),
-    ['volume_percent', 'mute', 'power', 'volume_percent'],
+    ['volume_percent', 'power', 'mute', 'volume_percent'],
   );
+});
+
+// --- 0.1.2: the cap verified, confirmation by value, Standby first ---------------
+
+test('C1 unmute: a lowering the device ignores keeps the mute', async (t) => {
+  const { gladys, device: fake } = await setup(t, { timings: { preRead: 200 } });
+  const device = await createDevice(gladys);
+  fake.change('zone', { volume_percent: 90, mute: true });
+  await settle();
+  fake.options.ignore.add('volume_percent');
+  const ack = await set(gladys, device, 'mute');
+  assert.equal(ack.success, false);
+  assert.match(ack.error, /volume not lowered to the cap .*mute kept/);
+  assert.deepEqual(volumes(fake), [50], 'the lowering was asked');
+  assert.ok(!fake.commands.some((c) => 'mute' in c.params), 'mute: false never sent');
+  assert.equal(fake.state.zone.mute, true);
+});
+
+test('C2 wake-up: a lowering the device ignores is not settled, the checks go on', async (t) => {
+  const {
+    gladys,
+    device: fake,
+    app,
+    logs,
+  } = await setup(t, {
+    timings: { preRead: 150, wakeCheckDelay: 50, wakeChecks: 3 },
+  });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  fake.options.ignore.add('volume_percent');
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.equal(app.wakeChecks.size, 1, 'not settled: checked again');
+  await waitFor(() => app.wakeChecks.size === 0, 'the end of the checks', 5_000);
+  assert.ok(volumes(fake).length >= 2, `${volumes(fake).length} lowerings`);
+  assert.ok(logs.some((l) => /volume not confirmed after waking up/.test(l)));
+});
+
+test('C3 after Power on, a volume pushed above the cap is lowered; Standby ends that', async (t) => {
+  const { gladys, device: fake } = await setup(t);
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 30 });
+  await settle();
+  assert.equal((await set(gladys, device, 'power_on')).success, true);
+  assert.deepEqual(volumes(fake), [], 'woke up under the cap');
+  // The volume turned up on the device while it wakes up.
+  fake.change('zone', { volume_percent: 90 });
+  await waitFor(() => fake.state.zone.volume_percent === 50, 'lowered to the cap');
+  assert.equal((await set(gladys, device, 'standby')).success, true);
+  fake.change('zone', { power: true, volume_percent: 90 });
+  await settle(200);
+  assert.equal(fake.state.zone.volume_percent, 90, 'not lowered after Standby');
+  assert.deepEqual(volumes(fake), [50]);
+});
+
+test('C4 a command is confirmed only by the state carrying the value asked', async (t) => {
+  const { gladys, device: fake } = await setup(t, {
+    deviceOptions: { ignore: ['volume_percent', 'power', 'source'] },
+    timings: { commandBudget: 600, preRead: 200 },
+  });
+  const device = await createDevice(gladys);
+  for (const [key, value] of [
+    ['volume', 40],
+    ['standby', 1],
+    ['source', 'TOSLINK1'],
+  ]) {
+    const ack = await set(gladys, device, key, value);
+    assert.equal(ack.success, false, key);
+    assert.match(ack.error, /Sent, without confirmation/, key);
+  }
+  assert.equal(fake.commands.length, 3, 'each one was sent');
+  assert.equal(fake.state.zone.volume_percent, 30);
+  assert.equal(fake.state.zone.power, true);
+  // Done by the device: confirmed.
+  fake.options.ignore.clear();
+  assert.equal((await set(gladys, device, 'volume', 40)).success, true);
+});
+
+test('C5 Standby never waits, and the waking commands queued before it are not sent', async (t) => {
+  const { gladys, device: fake } = await setup(t, {
+    deviceOptions: { ignore: ['volume_percent'] },
+    timings: { preRead: 200 },
+  });
+  const device = await createDevice(gladys);
+  // A volume the device ignores: the command waits for its confirmation.
+  const volume = set(gladys, device, 'volume', 40);
+  await settle(50);
+  const source = set(gladys, device, 'source', 'TOSLINK1');
+  const powerOn = set(gladys, device, 'power_on');
+  await settle(20);
+  const pressed = Date.now();
+  const standby = await set(gladys, device, 'standby');
+  assert.equal(standby.success, true, JSON.stringify(standby));
+  assert.ok(Date.now() - pressed < 1_000, 'not behind the volume command');
+  const [chosen, woken] = await Promise.all([source, powerOn]);
+  for (const ack of [chosen, woken]) {
+    assert.equal(ack.success, false);
+    assert.match(ack.error, /cancelled by Standby, nothing sent/);
+  }
+  assert.equal((await volume).success, false);
+  await settle(100);
+  assert.equal(fake.state.zone.power, false, 'Standby holds');
+  assert.ok(!fake.commands.some((c) => 'source' in c.params || c.params.power === 'ON'));
 });

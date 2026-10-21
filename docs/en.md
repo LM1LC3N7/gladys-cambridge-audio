@@ -54,12 +54,16 @@ volume set on the device itself (knob, remote, app) is not changed by the
 integration, except in the two cases where Gladys would make it heard:
 
 - **Unmute**: when the volume of the device is above the cap, it is set to
-  the cap first, then the mute is removed. When the volume cannot be read,
-  nothing is sent.
+  the cap first, then the mute is removed, only once the device says its
+  volume is at or under the cap; otherwise the mute is kept ("volume not
+  lowered to the cap, mute kept"). When the volume cannot be read, nothing is
+  sent.
 - **Power on**: after the wake-up, the volume is read again and set to the
-  cap when above it. When the device is slow to wake up, the integration
-  checks again every 2.5 s for about 15 s; after that the volume is not
-  corrected (the device resumes the volume it had before standby).
+  cap when above it. When the device is slow to wake up, or does not confirm
+  the lowering, the integration checks again every 2.5 s for about 15 s; a
+  volume turned up above the cap during those 15 s is lowered too. After
+  that, or after a Standby, the volume is not corrected (the device resumes
+  the volume it had before standby).
 
 When the pre-amplifier of the device is off (a streamer plugged into another
 amplifier), the volume is neither shown nor set: set it on the amplifier.
@@ -78,12 +82,16 @@ amplifier), the volume is neither shown nor set: set it on the amplifier.
 
 ## Commands
 
-Every command is answered within 4 seconds (Gladys waits 5 seconds). A
-command that left for the device without confirmation is reported "sent,
-without confirmation"; the state pushed by the device then shows what it
+Every command is answered within 4 seconds (Gladys waits 5 seconds). Power
+on, standby, volume, mute and source are confirmed only when the device gives
+back the value asked (a device can accept a message and ignore it); a command
+that left for the device without that confirmation is reported "sent,
+without confirmation", and the state pushed by the device then shows what it
 did. A command that could not leave is reported "nothing sent": so is any
-command, Standby included, to a device that is not connected. Standby and
-mute go before the commands waiting.
+command, Standby included, to a device that is not connected. Standby never
+waits behind another command, and cancels the commands still waiting that
+could wake the device up (power on, source, play, next, previous: "cancelled
+by Standby, nothing sent"). Mute goes before the commands waiting.
 
 When the source only offers the play/pause toggle, Play acts only when paused
 or stopped, Pause only when playing; in an in-between state (connecting,

@@ -40,11 +40,15 @@ Gladys ⇄ SDK ⇄ src/handlers.js ⇄ src/app.js (CambridgeAudioApp)
   sending), serialized per device, each within a 3.5 s budget (Gladys acks in
   5 s), dropped when they cannot start in time. Mute is a press: the state is
   read just before and the explicit value sent; unmuting (and Power on)
-  first brings a volume above the cap back to it. Standby and mute go before
-  the commands waiting. Play and pause use the
+  first brings a volume above the cap back to it, verified on the volume the
+  device gives back (unmute refused otherwise; after Power on, a volume pushed
+  above the cap during the checks is lowered too). Standby never waits and
+  cancels the waking commands still queued; mute goes before the commands
+  waiting. Play and pause use the
   explicit action, or the toggle only after the play state read again says it
-  is needed. A message that may have reached the device is reported "sent,
-  without confirmation".
+  is needed. Power, volume, mute and source are confirmed only by the value
+  the device gives back; a message that may have reached the device without
+  it is reported "sent, without confirmation".
 - **Features**: `music` (volume, play, pause, next, previous, playback state)
   like the core Sonos service, `television/volume-mute`, `text/select`
   (source), `text/text` (title), `button/push` (power on, standby) and a

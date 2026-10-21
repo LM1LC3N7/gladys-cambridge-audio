@@ -55,8 +55,23 @@ export function isLanAddress(host) {
   );
 }
 
-/** Commands that go before the ones waiting: quieting down never waits behind the rest. */
-const URGENT = new Set([FEATURES.STANDBY, FEATURES.MUTE]);
+/**
+ * Commands that go before the ones waiting: quieting down never waits behind
+ * the rest. Standby is not queued at all (see setValue).
+ */
+const URGENT = new Set([FEATURES.MUTE]);
+
+/** Commands that can take a device out of standby: a Standby asked after them wins. */
+const WAKES = new Set([
+  FEATURES.POWER_ON,
+  FEATURES.SOURCE,
+  FEATURES.PLAY,
+  FEATURES.NEXT,
+  FEATURES.PREVIOUS,
+]);
+
+/** The volume the device gives back, at or under `cap`. */
+const atOrUnder = (cap) => (zone) => Number.isInteger(zone.volume) && zone.volume <= cap;
 
 /**
  * The volume of a command, validated strictly: an integer 0..100 given as a
@@ -125,6 +140,12 @@ export class CambridgeAudioApp {
     this.publishTimers = new Map();
     /** unitId -> { timer }: the one wake-up check chain of a device (after Power on) */
     this.wakeChecks = new Map();
+    /** unitId -> until when a volume pushed above the cap is lowered (after Power on) */
+    this.wakeWatch = new Map();
+    /** unitIds whose volume is being lowered by watchWakeVolume */
+    this.lowering = new Set();
+    /** unitId -> number of Standby asked (a waking command older than the last one is not sent) */
+    this.standbySeq = new Map();
     this.scanning = undefined;
     this.lastAutoScan = -Infinity;
     this.generation = 0;
@@ -196,6 +217,7 @@ export class CambridgeAudioApp {
     for (const unitId of [...this.wakeChecks.keys()]) {
       this.cancelWakeCheck(unitId);
     }
+    this.wakeWatch.clear();
     if (this.persistTimer) {
       this.timers.clearTimeout(this.persistTimer);
       this.persistTimer = undefined;
@@ -237,17 +259,17 @@ export class CambridgeAudioApp {
 
   /**
    * The command queue of one device: one command at a time. An `urgent`
-   * command (standby, mute) goes before the commands still waiting (after
-   * the other urgent ones), never before the one already running.
+   * command (mute) goes before the commands still waiting (after the other
+   * urgent ones), never before the one already running.
    */
-  enqueue(unitId, task, { urgent = false } = {}) {
+  enqueue(unitId, task, { urgent = false, wakes = false } = {}) {
     let queue = this.queues.get(unitId);
     if (!queue) {
       queue = { running: false, items: [] };
       this.queues.set(unitId, queue);
     }
     return new Promise((resolve, reject) => {
-      const item = { task, resolve, reject, urgent };
+      const item = { task, resolve, reject, urgent, wakes };
       if (urgent) {
         const index = queue.items.findIndex((i) => !i.urgent);
         queue.items.splice(index === -1 ? queue.items.length : index, 0, item);
@@ -272,6 +294,17 @@ export class CambridgeAudioApp {
       }
     }
     queue.running = false;
+  }
+
+  /** The waking commands still waiting in the queue of a device: answered `err`, never run. */
+  dropWaking(unitId, err) {
+    const queue = this.queues.get(unitId);
+    if (!queue) {
+      return;
+    }
+    const dropped = queue.items.filter((item) => item.wakes);
+    queue.items = queue.items.filter((item) => !item.wakes);
+    dropped.forEach((item) => item.reject(err));
   }
 
   // --- Known devices -----------------------------------------------------------
@@ -383,6 +416,9 @@ export class CambridgeAudioApp {
       }
       if (extra === 'info' && this.updateIdentity(device, link.state.info)) {
         this.publishDevices().catch(() => {});
+      }
+      if (extra === 'zone') {
+        this.watchWakeVolume(device, link);
       }
       this.schedulePublish(device.unitId);
     } else if (event === 'failed') {
@@ -722,21 +758,46 @@ export class CambridgeAudioApp {
     // The budget runs from the request of Gladys, the wait in the queue included.
     const started = this.now();
     let late = false;
-    // Set just before a command message leaves: from then on, it may have
-    // reached the device, whatever happens next.
-    const context = { mayHaveSent: false };
-    const run = this.enqueue(
-      device.unitId,
-      async () => {
-        if (late || this.remaining(started) < 50) {
-          // Gladys stopped waiting while this command was queued: dropped, never sent late.
-          late = true;
-          throw new DeviceError(ERROR_KINDS.BUDGET, 'No time left for this command, nothing sent');
-        }
-        return this.command(device, key, checked, started, context);
-      },
-      { urgent: URGENT.has(key) },
-    );
+    // A Standby asked after this command arrived wins: a command that can
+    // wake the device is then not sent (checked when its turn comes, and
+    // again right before each of its messages leaves).
+    const seq = this.standbySeq.get(device.unitId) ?? 0;
+    const context = {
+      // Set just before a command message leaves: from then on, it may have
+      // reached the device, whatever happens next.
+      mayHaveSent: false,
+      shouldSend: () => !WAKES.has(key) || (this.standbySeq.get(device.unitId) ?? 0) === seq,
+    };
+    let run;
+    if (key === FEATURES.STANDBY) {
+      // Standby never waits: not behind the command running (a read, a
+      // confirmation), nor behind the waking commands still queued, which it
+      // cancels with the volume checks after a wake-up.
+      this.standbySeq.set(device.unitId, seq + 1);
+      this.wakeWatch.delete(device.unitId);
+      this.cancelWakeCheck(device.unitId);
+      this.dropWaking(device.unitId, this.cancelled(device));
+      run = this.command(device, key, checked, started, context);
+    } else {
+      run = this.enqueue(
+        device.unitId,
+        async () => {
+          if (!context.shouldSend()) {
+            throw this.cancelled(device);
+          }
+          if (late || this.remaining(started) < 50) {
+            // Gladys stopped waiting while this command was queued: dropped, never sent late.
+            late = true;
+            throw new DeviceError(
+              ERROR_KINDS.BUDGET,
+              'No time left for this command, nothing sent',
+            );
+          }
+          return this.command(device, key, checked, started, context);
+        },
+        { urgent: URGENT.has(key), wakes: WAKES.has(key) },
+      );
+    }
     // Wall-clock deadline (not the injectable timers): the ack Gladys waits for.
     let timer;
     const deadline = new Promise((resolve, reject) => {
@@ -769,15 +830,54 @@ export class CambridgeAudioApp {
     return this.timings.commandBudget - (this.now() - started);
   }
 
+  cancelled(device) {
+    return new DeviceError(
+      ERROR_KINDS.CANCELLED,
+      `${deviceName(device)}: cancelled by Standby, nothing sent`,
+    );
+  }
+
   /**
-   * Sends one command message and waits for its answer. A message that may
+   * Whether the zone state the device gives confirms `check`: the state
+   * known now, else the one read again, else one it pushes within `budget()`.
+   * An answer `result: 200` alone never confirms anything: a device may
+   * accept a message and ignore it.
+   */
+  async confirmZone(link, check, budget) {
+    const holds = (state) => check(state.zone ?? {});
+    if (holds(link.state)) {
+      return true;
+    }
+    if (budget() > 0) {
+      await link.request(PATHS.ZONE_STATE, {}, budget()).catch(() => {});
+      if (holds(link.state)) {
+        return true;
+      }
+    }
+    return link.waitState(holds, budget());
+  }
+
+  /**
+   * Sends one command message and waits for its answer, then, with
+   * `confirm`, for a zone state carrying the value asked. A message that may
    * have reached the device is never reported as "not sent": "sent, without
    * confirmation" (the pushed state shows what the device did).
    */
-  async send(device, link, [path, params], started, context) {
+  async send(
+    device,
+    link,
+    [path, params],
+    started,
+    context,
+    { confirm, budget = () => this.remaining(started) - 100 } = {},
+  ) {
+    if (!context.shouldSend()) {
+      throw this.cancelled(device);
+    }
     context.mayHaveSent = true;
+    let answer;
     try {
-      return await link.request(path, params, this.remaining(started));
+      answer = await link.request(path, params, this.remaining(started));
     } catch (err) {
       if (err.kind === ERROR_KINDS.TIMEOUT || err.kind === ERROR_KINDS.CLOSED) {
         throw new DeviceError(ERROR_KINDS.TIMEOUT, 'Sent, without confirmation from the device', {
@@ -795,6 +895,12 @@ export class CambridgeAudioApp {
       }
       throw err;
     }
+    if (confirm && !(await this.confirmZone(link, confirm, budget))) {
+      throw new DeviceError(ERROR_KINDS.TIMEOUT, 'Sent, without confirmation from the device', {
+        sent: true,
+      });
+    }
+    return answer;
   }
 
   /** A read made before a command message: whatever goes wrong, nothing was sent. */
@@ -825,25 +931,48 @@ export class CambridgeAudioApp {
           : `${deviceName(device)}: address unknown, run "Find the devices"`,
       );
     }
-    const send = (message) => this.send(device, link, message, started, context);
+    const send = (message, options) => this.send(device, link, message, started, context, options);
     switch (key) {
       case FEATURES.POWER_ON: {
         // A new press starts over: the check chain of the previous one stops.
         this.cancelWakeCheck(device.unitId);
-        await send(COMMANDS.powerOn());
+        if (!context.shouldSend()) {
+          throw this.cancelled(device);
+        }
+        // A volume pushed above the cap while the device wakes up is lowered
+        // too (watchWakeVolume), until the end of the checks or a Standby.
+        this.wakeWatch.set(
+          device.unitId,
+          this.now() + this.timings.wakeChecks * this.timings.wakeCheckDelay,
+        );
+        try {
+          await send(COMMANDS.powerOn(), {
+            confirm: (zone) => zone.power === true,
+            budget: () => Math.min(this.timings.preRead, this.remaining(started) - 100),
+          });
+        } catch (err) {
+          // Sent, not confirmed (still waking up): the checks run anyway.
+          if (err.sent && context.shouldSend()) {
+            this.capAfterWake(device, 1);
+          }
+          throw err;
+        }
         // A device wakes up at the volume it had: brought back to the cap.
         // Within what is left of this command first, then in the background
         // while the device is still waking up. The ack never depends on it.
-        const done = await this.capVolume(device, link, () =>
-          Math.min(this.timings.preRead, this.remaining(started) - 100),
+        const done = await this.capVolume(
+          device,
+          link,
+          () => Math.min(this.timings.preRead, this.remaining(started) - 100),
+          context.shouldSend,
         ).catch(() => false);
-        if (!done) {
+        if (!done && context.shouldSend()) {
           this.capAfterWake(device, 1);
         }
         return undefined;
       }
       case FEATURES.STANDBY:
-        await send(COMMANDS.standby());
+        await send(COMMANDS.standby(), { confirm: (zone) => zone.power === false });
         return undefined;
       case FEATURES.VOLUME: {
         if (link.state.zone?.preAmp !== true) {
@@ -858,7 +987,7 @@ export class CambridgeAudioApp {
         if (target < value) {
           this.logger.info(`${deviceName(device)}: volume ${value} capped to ${cap}`);
         }
-        await send(COMMANDS.setVolume(target));
+        await send(COMMANDS.setVolume(target), { confirm: (zone) => zone.volume === target });
         return undefined;
       }
       case FEATURES.MUTE: {
@@ -881,10 +1010,27 @@ export class CambridgeAudioApp {
             this.logger.info(
               `${deviceName(device)}: volume ${zone.volume} lowered to ${cap} before unmuting`,
             );
-            await send(COMMANDS.setVolume(cap));
+            // Unmuted only once the device gives back a volume at or under
+            // the cap: a lowering it ignored keeps the mute.
+            try {
+              await send(COMMANDS.setVolume(cap), {
+                confirm: atOrUnder(cap),
+                budget: () => Math.min(this.timings.preRead, this.remaining(started) - 100),
+              });
+            } catch (err) {
+              if (err.sent) {
+                throw new DeviceError(
+                  ERROR_KINDS.TIMEOUT,
+                  `${deviceName(device)}: volume not lowered to the cap (sent, without confirmation), mute kept`,
+                  { sent: true },
+                );
+              }
+              throw err;
+            }
           }
         }
-        await send(COMMANDS.setMute(!zone.mute));
+        const mute = !zone.mute;
+        await send(COMMANDS.setMute(mute), { confirm: (state) => state.mute === mute });
         return undefined;
       }
       case FEATURES.PLAY:
@@ -906,7 +1052,7 @@ export class CambridgeAudioApp {
             `${deviceName(device)}: source "${value}" not available now, nothing sent`,
           );
         }
-        await send(COMMANDS.setSource(value));
+        await send(COMMANDS.setSource(value), { confirm: (zone) => zone.source === value });
         return undefined;
       }
       default:
@@ -949,10 +1095,11 @@ export class CambridgeAudioApp {
   /**
    * Reads `/zone/state` and lowers the volume to the cap when the device is
    * on, controls its volume and is above the cap. True when settled (lowered,
-   * or nothing to lower), false when the device cannot tell yet (waking up).
+   * or nothing to lower), false when the device cannot tell yet (waking up)
+   * or did not confirm the lowering (the checks go on). `alive` false stops it.
    */
-  async capVolume(device, link, budget) {
-    if (budget() <= 0 || !link.connected) {
+  async capVolume(device, link, budget, alive = () => true) {
+    if (budget() <= 0 || !link.connected || !alive()) {
       return false;
     }
     const zone = parseZoneState(await link.request(PATHS.ZONE_STATE, {}, budget()));
@@ -969,12 +1116,44 @@ export class CambridgeAudioApp {
     if (zone.volume <= cap) {
       return true;
     }
-    if (budget() <= 0) {
+    if (budget() <= 0 || !alive()) {
       return false;
     }
     this.logger.info(`${deviceName(device)}: woke up at volume ${zone.volume}, lowered to ${cap}`);
     await link.request(...COMMANDS.setVolume(cap), budget());
-    return true;
+    // Settled only on the volume the device gives back, never on the answer alone.
+    return this.confirmZone(link, atOrUnder(this.config.maxVolume), budget);
+  }
+
+  /**
+   * A volume pushed above the cap while a device wakes up (within the window
+   * of the checks after a Power on sent by Gladys, closed by Standby):
+   * lowered through the device queue, one at a time per device.
+   */
+  watchWakeVolume(device, link) {
+    const unitId = device.unitId;
+    const until = this.wakeWatch.get(unitId);
+    if (until === undefined || this.lowering.has(unitId)) {
+      return;
+    }
+    if (this.now() > until) {
+      this.wakeWatch.delete(unitId);
+      return;
+    }
+    const zone = link.state.zone;
+    if (zone?.power !== true || zone.preAmp !== true || !(zone.volume > this.config.maxVolume)) {
+      return;
+    }
+    const watching = () => (this.wakeWatch.get(unitId) ?? -Infinity) >= this.now();
+    this.lowering.add(unitId);
+    this.enqueue(unitId, () => {
+      const current = this.connectedLink(device);
+      return current && watching()
+        ? this.capVolume(device, current, () => this.timings.preRead, watching)
+        : false;
+    })
+      .catch(() => false)
+      .finally(() => this.lowering.delete(unitId));
   }
 
   /** Cancels the wake-up check chain of a device, if any. */
@@ -1014,7 +1193,7 @@ export class CambridgeAudioApp {
         if (!link || !current()) {
           return !current();
         }
-        return this.capVolume(device, link, () => this.timings.preRead);
+        return this.capVolume(device, link, () => this.timings.preRead, current);
       })
         .catch(() => false)
         .then((done) => {

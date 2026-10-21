@@ -55,12 +55,16 @@ enregistrée s'applique tout de suite. Le volume réglé sur l'appareil lui-mêm
 dans deux cas où Gladys le rendrait audible :
 
 - **Retirer la sourdine** : si le volume de l'appareil dépasse le plafond, il
-  est d'abord ramené au plafond, puis la sourdine est retirée. Si le volume
-  ne peut pas être lu, rien n'est envoyé.
+  est d'abord ramené au plafond, puis la sourdine est retirée, seulement
+  quand l'appareil indique un volume au plafond ou en dessous ; sinon la
+  sourdine est gardée (« volume non ramené au plafond, sourdine gardée »). Si
+  le volume ne peut pas être lu, rien n'est envoyé.
 - **Allumer** : après le réveil, le volume est relu et ramené au plafond s'il
-  le dépasse. Si l'appareil met du temps à se réveiller, l'intégration
-  revérifie toutes les 2,5 s pendant 15 s environ ; au-delà, le volume n'est
-  pas corrigé (l'appareil reprend le volume qu'il avait avant sa veille).
+  le dépasse. Si l'appareil met du temps à se réveiller, ou ne confirme pas
+  la baisse, l'intégration revérifie toutes les 2,5 s pendant 15 s environ ;
+  un volume monté au-dessus du plafond pendant ces 15 s est aussi ramené.
+  Au-delà, ou après une Veille, le volume n'est pas corrigé (l'appareil
+  reprend le volume qu'il avait avant sa veille).
 
 Si le préampli de l'appareil est désactivé (streamer branché sur un autre
 ampli), le volume n'est ni affiché ni réglable : il se règle sur l'ampli.
@@ -80,11 +84,17 @@ ampli), le volume n'est ni affiché ni réglable : il se règle sur l'ampli.
 ## Commandes
 
 Chaque commande reçoit une réponse en moins de 4 secondes (Gladys attend 5
-secondes). Une commande partie vers l'appareil sans confirmation est signalée
-« envoyée, sans confirmation » ; l'état poussé par l'appareil montre ensuite
-ce qu'il a fait. Une commande qui n'a pas pu partir est signalée « rien
-envoyé » : c'est le cas de toute commande, Veille comprise, vers un appareil
-non connecté. Veille et sourdine passent avant les commandes en attente.
+secondes). Allumer, Veille, volume, sourdine et source ne sont confirmés que
+quand l'appareil renvoie la valeur demandée (un appareil peut accepter un
+message et l'ignorer) ; une commande partie vers l'appareil sans cette
+confirmation est signalée « envoyée, sans confirmation », et l'état poussé
+par l'appareil montre ensuite ce qu'il a fait. Une commande qui n'a pas pu
+partir est signalée « rien envoyé » : c'est le cas de toute commande, Veille
+comprise, vers un appareil non connecté. Veille n'attend jamais derrière une
+autre commande, et annule les commandes encore en attente qui pourraient
+rallumer l'appareil (allumer, source, lecture, suivant, précédent :
+« cancelled by Standby, nothing sent »). La sourdine passe avant les
+commandes en attente.
 
 Quand la source n'offre que la bascule lecture/pause, Lecture n'agit qu'en
 pause ou à l'arrêt, Pause qu'en lecture ; dans un état intermédiaire

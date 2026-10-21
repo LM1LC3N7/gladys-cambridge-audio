@@ -24,6 +24,14 @@ up to date at the end of every milestone.
       fake device on the loopback interface only, never with a real device.
       The store validator could not be run from the development session (no
       access to it there): to run before the first release.
+- [x] **Fix 0.1.2 — cap verified** (2026-10-21, after the review of
+      gladys-nad f895c30 and gladys-linn 85962e1): unmute refused (mute
+      kept) unless the device gives back a volume at or under the cap; the
+      lowering after a wake-up settled only on the volume given back; a
+      volume pushed above the cap during the wake-up window is lowered;
+      commands confirmed by value; Standby outside the queue, cancelling the
+      waking commands still waiting. Tests C1 to C5 (the fake device can
+      accept a command and ignore it: `ignore`).
 - [ ] **Milestone 2 — real devices** (testers with a CXN, MXN, EVO, CXA or
       AXN). To check first:
   - the answer to a subscription message (a `response` or nothing), and the
@@ -122,8 +130,31 @@ up to date at the end of every milestone.
   `pause` or `stop`); any other state (`connecting`, `buffering`, `ready`,
   `NETWORK`, unknown) is refused, "play state X, nothing sent". Next /
   previous: `skip_track` ±1.
-- Queue (review 2026-10-19): Standby and Mute go before the commands still
-  waiting (after the other urgent ones), never before the one running.
+- Queue (review 2026-10-19): Mute goes before the commands still waiting
+  (after the other urgent ones), never before the one running.
+  (Fix 0.1.2) Standby is not queued: it leaves at once (never behind a read
+  or a confirmation of the command running), counts in `standbySeq`, closes
+  the wake-up window and the check chain, and answers the waking commands
+  still queued (power on, source, play, next, previous, as gladys-linn)
+  "cancelled by Standby, nothing sent"; a waking command already running
+  checks `standbySeq` again right before each message leaves (as NAD
+  `shouldSend`). Volume, mute and pause are not waking commands.
+- Confirmation by value (fix 0.1.2, as NAD `confirmsSet`): a StreamMagic
+  answer carries no state (`result: 200` only), and a device can accept a
+  message and ignore it. Power on (`power` true), Standby (`power` false),
+  volume (the value sent), mute (the value sent) and source are confirmed
+  only by a zone state carrying the value: the state known, else
+  `/zone/state` read once, else a pushed update (`DeviceLink.waitState`),
+  within the command budget (Power on: 1.5 s at most, to leave time for the
+  cap); otherwise "Sent, without confirmation from the device". Play,
+  pause, next and previous have no value to check: the answer is enough.
+- Cap verified (fix 0.1.2): unmute only once the device gives back a volume
+  at or under the cap ("volume not lowered to the cap …, mute kept");
+  `capVolume` true only on the volume given back, so the wake-up checks go
+  on after a lowering ignored. Wake-up window (`wakeWatch`, as NAD M2):
+  from a Power on sent by Gladys, `wakeChecks` × `wakeCheckDelay` (15 s), a
+  pushed zone state on, pre-amplifier on, above the cap is lowered through
+  the queue, one at a time (`lowering`); Standby and stop() close it.
 - Late answers (review 2026-10-19): after a request timed out, the first
   `response` on its path within 2 s is dropped (data included), so it never
   settles the next request on that path with an old state. Known limit of

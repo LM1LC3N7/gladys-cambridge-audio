@@ -10,6 +10,25 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Fixed
+
+- Unmute: the mute is kept ("volume not lowered to the cap, mute kept") unless
+  the device gives back a volume at or under the cap after the lowering; a
+  lowering it accepts but ignores no longer unmutes it above the cap.
+- Power on: the volume lowered after the wake-up counts only once the device
+  gives it back at or under the cap; otherwise the checks go on.
+- Power on: during the checks after a Power on sent by Gladys (about 15 s), a
+  volume pushed above the cap is brought back to it through the device queue;
+  Standby ends that window.
+- Power on, standby, volume, mute and source are confirmed only by a state
+  carrying the value asked, never by the answer `result: 200` alone;
+  otherwise "sent, without confirmation".
+- Standby never waits behind the command running, and the commands still
+  waiting that could wake the device (power on, source, play, next,
+  previous) are not sent after it ("cancelled by Standby, nothing sent").
+- The manifest test no longer pins the version 0.1.0 (it failed since the
+  0.1.1 release).
+
 ## [0.1.1] - 2026-10-19
 
 ### Added

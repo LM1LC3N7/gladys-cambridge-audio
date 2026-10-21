@@ -58,6 +58,8 @@ export class DeviceLink {
     /** The last error of a connection attempt (shown by "Check"). */
     this.lastError = undefined;
     this.state = {};
+    /** The `waitState` calls waiting for a pushed state. */
+    this.waiters = new Set();
   }
 
   get key() {
@@ -85,6 +87,38 @@ export class DeviceLink {
     const session = this.session;
     this.session = undefined;
     session?.close();
+    this.releaseWaiters();
+  }
+
+  /**
+   * Resolves true as soon as `check(state)` holds (now, or on a state the
+   * device sends), false after `timeoutMs` or when the connection closes.
+   */
+  waitState(check, timeoutMs) {
+    if (check(this.state)) {
+      return Promise.resolve(true);
+    }
+    if (!this.connected || !(timeoutMs > 0)) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      const waiter = { check, resolve, timer: undefined };
+      waiter.timer = this.timers.setTimeout(() => this.release(waiter, false), timeoutMs);
+      this.waiters.add(waiter);
+    });
+  }
+
+  release(waiter, value) {
+    if (this.waiters.delete(waiter)) {
+      this.timers.clearTimeout(waiter.timer);
+      waiter.resolve(value);
+    }
+  }
+
+  releaseWaiters() {
+    for (const waiter of [...this.waiters]) {
+      this.release(waiter, false);
+    }
   }
 
   /**
@@ -217,6 +251,11 @@ export class DeviceLink {
       return;
     }
     this.state = { ...this.state, [field]: parsed };
+    for (const waiter of [...this.waiters]) {
+      if (waiter.check(this.state)) {
+        this.release(waiter, true);
+      }
+    }
     this.onEvent('update', this, field);
   }
 
@@ -244,6 +283,7 @@ export class DeviceLink {
     }
     this.session = undefined;
     this.stopHeartbeat();
+    this.releaseWaiters();
     if (this.stopped || this.connectedAt === undefined) {
       // Closed while connecting: connect() fails and spaces the next attempt.
       return;

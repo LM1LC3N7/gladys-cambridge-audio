@@ -3,7 +3,9 @@
 // used by the integration, the answers and pushed updates of aiostreammagic's
 // protocol. `silent` leaves commands unanswered, `refuse` answers them with an
 // error result, `noPreAmp` turns the pre-amplifier off, `delay` answers
-// commands late, `wakeDelay` reports the power on only after a while.
+// commands late, `wakeDelay` reports the power on only after a while,
+// `ignore` (parameter names, e.g. 'volume_percent', 'power') accepts those
+// commands (`result: 200`) without doing them.
 // -----------------------------------------------------------------------------
 
 import { WebSocketServer } from 'ws';
@@ -56,6 +58,7 @@ export async function startFakeDevice({
   port = 0,
   delay = 0,
   wakeDelay = 0,
+  ignore = [],
 } = {}) {
   const state = defaultState(unitId);
   if (noPreAmp) {
@@ -63,7 +66,7 @@ export async function startFakeDevice({
   }
   const commands = [];
   const subscriptions = new Map();
-  const options = { silent, refuse, delay, wakeDelay, dropReads: 0 };
+  const options = { silent, refuse, delay, wakeDelay, dropReads: 0, ignore: new Set(ignore) };
   /** Every read (a request without parameters), by path, in order. */
   const reads = [];
   const sockets = new Set();
@@ -155,6 +158,12 @@ export async function startFakeDevice({
         return;
       }
       const answer = () => {
+        if (keys.some((k) => options.ignore.has(k))) {
+          // Accepted, not done: the state pushed again is unchanged.
+          respond(socket, path, undefined);
+          push('/zone/state');
+          return;
+        }
         const changed = apply(path, params);
         respond(socket, path, undefined);
         changed.forEach(push);
