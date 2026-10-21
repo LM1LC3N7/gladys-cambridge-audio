@@ -116,8 +116,8 @@ up to date at the end of every milestone.
     (still waking up), checked again every 2.5 s, 6 times at most, through
     the device queue (the ack of Power on never depends on it). After that,
     nothing more is done (said in the docs). (Approval 2026-10-19) One chain
-    per device (`wakeChecks`: unitId -> timer): a new Power on cancels the
-    running one and starts over at attempt 1; stop() clears them. The delay
+    per device (`wakeChecks`: unitId -> timer): a new Power on that may
+    have left cancels the running one and starts over at attempt 1; stop() clears them. The delay
     (2.5 s) is longer than the late-answer guard (2 s), so a check that
     timed out never makes the next one drop its answer.
     The volume is only set and published when `pre_amp_mode` is true (as Home
@@ -170,7 +170,12 @@ up to date at the end of every milestone.
   says it is on (a device that ignored the Standby while waking up stays
   capped, as in 0.1.1); the chain starts whenever the Power on may have
   left, whatever Standby came after. The window also follows a Power on on
-  a device already on (said in the docs).
+  a device already on (said in the docs). (Approval of 0.1.2, round 2) A
+  new Power on replaces the chain of the previous press only once its
+  message may have left (`capAfterWake(…, 1)`), never at its start; when
+  nothing left or the device refused it, `wakeWatch` and `awaitingWake` are
+  put back as they were (test C8: a second press refused by a device busy
+  waking up keeps the cap of the first).
 - Late answers (review 2026-10-19): after a request timed out, the first
   `response` on its path within 2 s is dropped (data included), so it never
   settles the next request on that path with an old state. Known limit of

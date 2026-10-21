@@ -954,16 +954,19 @@ export class CambridgeAudioApp {
     const send = (message, options) => this.send(device, link, message, started, context, options);
     switch (key) {
       case FEATURES.POWER_ON: {
-        // A new press starts over: the check chain of the previous one stops.
-        this.cancelWakeCheck(device.unitId);
+        // The checks of a previous press go on until this one may have left
+        // (capAfterWake then starts them over): a press refused by a device
+        // busy waking up never drops them.
         if (!context.shouldSend()) {
           throw this.cancelled(device);
         }
         // A volume pushed above the cap while the device wakes up is lowered
         // too (watchWakeVolume), until the end of the checks. Opened as the
-        // message leaves (the pushes may come before its answer), closed
-        // again when nothing left or the device refused it.
+        // message leaves (the pushes may come before its answer); when
+        // nothing left or the device refused it, put back as it was.
         const unitId = device.unitId;
+        const watchBefore = this.wakeWatch.get(unitId);
+        const awaitingBefore = this.awaitingWake.has(unitId);
         this.wakeWatch.set(
           unitId,
           this.now() + this.timings.wakeChecks * this.timings.wakeCheckDelay,
@@ -976,8 +979,14 @@ export class CambridgeAudioApp {
             // Sent, not answered: it may be waking up, the checks run anyway.
             this.capAfterWake(device, 1);
           } else {
-            this.wakeWatch.delete(unitId);
-            this.awaitingWake.delete(unitId);
+            if (watchBefore === undefined) {
+              this.wakeWatch.delete(unitId);
+            } else {
+              this.wakeWatch.set(unitId, watchBefore);
+            }
+            if (!awaitingBefore) {
+              this.awaitingWake.delete(unitId);
+            }
           }
           throw err;
         }

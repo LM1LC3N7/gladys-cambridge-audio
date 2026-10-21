@@ -884,6 +884,28 @@ test('C6 Standby ignored by a device waking up: not confirmed, the cap still hol
   assert.deepEqual(volumes(fake), [50]);
 });
 
+test('C8 a second Power on refused while the device wakes up keeps the cap of the first', async (t) => {
+  const { gladys, device: fake } = await setup(t, {
+    deviceOptions: { ignore: ['power'] },
+    timings: { wakeCheckDelay: 300, wakeChecks: 6, commandBudget: 600 },
+  });
+  const device = await createDevice(gladys);
+  fake.change('zone', { power: false, volume_percent: 85 });
+  await settle();
+  // Slow wake-up: sent, without confirmation.
+  assert.match((await set(gladys, device, 'power_on')).error, /without confirmation/);
+  // Pressed again, refused by the device busy waking up.
+  fake.options.refuse = true;
+  const second = await set(gladys, device, 'power_on');
+  fake.options.refuse = false;
+  assert.match(second.error, /Refused by the device/);
+  fake.options.ignore.delete('power');
+  await settle(200);
+  fake.change('zone', { power: true });
+  await waitFor(() => fake.state.zone.volume_percent === 50, 'the cap of the first press');
+  assert.deepEqual(volumes(fake), [50]);
+});
+
 test('C7 a slow wake-up within the budget: Power on confirmed, then capped', async (t) => {
   const { gladys, device: fake } = await setup(t, { deviceOptions: { wakeDelay: 1_500 } });
   const device = await createDevice(gladys);

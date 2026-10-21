@@ -21,7 +21,8 @@ the notes of the version's GitHub Release.
   volume pushed above the cap is brought back to it through the device queue.
   A Standby pressed meanwhile no longer stops these checks (they only lower
   a device that says it is on), and a Power on refused by the device opens
-  no window.
+  no window. A second Power on refused while the device wakes up no longer
+  drops the checks and the window of the first one.
 - Power on, standby, volume, mute and source are confirmed only by a state
   carrying the value asked, never by the answer `result: 200` alone;
   otherwise "sent, without confirmation". Power on waits for the wake-up
