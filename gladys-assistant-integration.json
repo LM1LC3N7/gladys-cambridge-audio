@@ -6,8 +6,8 @@
     "en": "Cambridge Audio StreamMagic amplifiers and streamers, local: power, volume, source, playback.",
     "fr": "Amplis et streamers Cambridge Audio StreamMagic en local : marche, volume, source, lecture."
   },
-  "version": "0.1.1",
-  "docker_image": "ghcr.io/lm1lc3n7/gladys-cambridge-audio:0.1.1",
+  "version": "0.1.2",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-cambridge-audio:0.1.2",
   "gladys_version": ">=5.1.0",
   "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-cambridge-audio/main/cover.png",
   "categories": ["multimedia"],
