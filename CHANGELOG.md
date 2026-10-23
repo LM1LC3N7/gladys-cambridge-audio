@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-10-23
+
 ## [0.1.2] - 2026-10-21
 
 ### Fixed
@@ -81,6 +83,7 @@ the notes of the version's GitHub Release.
 - The mDNS search only connects to local network addresses (no public,
   loopback, broadcast, multicast or cloud metadata address).
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-cambridge-audio/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/LM1LC3N7/gladys-cambridge-audio/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/LM1LC3N7/gladys-cambridge-audio/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/LM1LC3N7/gladys-cambridge-audio/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/LM1LC3N7/gladys-cambridge-audio/releases/tag/v0.1.1
