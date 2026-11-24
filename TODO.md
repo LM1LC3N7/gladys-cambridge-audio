@@ -256,3 +256,7 @@ up to date at the end of every milestone.
   browses); the websocket is always asked on port 80 (as aiostreammagic),
   whatever port the service announces.
 - One zone, `ZONE1`, as aiostreammagic.
+
+## Next patch
+
+- Migration review minors: see `_lots/migration-reviews/w10-gladys-cambridge-audio-r1.md`.
