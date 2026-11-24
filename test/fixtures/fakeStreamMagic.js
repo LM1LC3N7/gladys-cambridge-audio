@@ -70,6 +70,8 @@ export async function startFakeDevice({
   /** Every read (a request without parameters), by path, in order. */
   const reads = [];
   const sockets = new Set();
+  // Pending slow wake-ups, cleared on close (a 60 s one kept the test process alive).
+  const wakes = new Set();
   const upgrades = [];
 
   const server = new WebSocketServer({
@@ -174,10 +176,12 @@ export async function startFakeDevice({
         respond(socket, path, undefined);
         changed.forEach(push);
         if (slowWake) {
-          setTimeout(() => {
+          const wake = setTimeout(() => {
+            wakes.delete(wake);
             state.zone.power = true;
             push('/zone/state');
           }, options.wakeDelay);
+          wakes.add(wake);
         }
       };
       if (options.delay > 0) {
@@ -224,6 +228,8 @@ export async function startFakeDevice({
       }
     },
     close() {
+      wakes.forEach(clearTimeout);
+      wakes.clear();
       for (const socket of sockets) {
         socket.terminate();
       }

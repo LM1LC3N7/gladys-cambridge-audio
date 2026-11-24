@@ -7,7 +7,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DEFAULT_CONFIG } from '../src/config.js';
-import { ACTIONS, MAX_VOLUME, MDNS_SERVICES } from '../src/constants.js';
+import { createFakeGladys } from '@gladysassistant/integration-sdk/testing';
+import { ACTIONS, FEATURES, MAX_VOLUME, MDNS_SERVICES } from '../src/constants.js';
+import { buildDevice } from '../src/model.js';
+import { assertCoreDevice, assertCoreFeature } from './helpers/coreFeature.js';
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 const manifest = JSON.parse(read('gladys-assistant-integration.json'));
@@ -136,4 +139,22 @@ test('the image ships the license and the third-party notices', () => {
   assert.match(notices, /aiostreammagic 2\.13\.2/);
   assert.match(notices, /Copyright \(c\) 2024 Noah Husby/);
   assert.match(notices, /Permission is hereby granted, free of charge/);
+});
+
+test('every feature has a numeric min and max and the other core fields', () => {
+  const gladys = createFakeGladys({ selector: 'cambridge-audio' });
+  const known = { unitId: 'abc123', name: 'Living room', model: 'CXN100', host: '192.168.1.20' };
+  const sources = [
+    { value: 'AIRPLAY', label: 'AirPlay' },
+    { value: 'SPOTIFY', label: 'Spotify Connect' },
+  ];
+  const device = buildDevice(gladys, { ...known, sourceOptions: sources });
+  assert.equal(assertCoreDevice(device, 'device'), Object.keys(FEATURES).length);
+  // No source seen yet: an empty list, which Gladys stores as no option.
+  const bare = buildDevice(gladys, { unitId: 'abc123' });
+  for (const feature of bare.features) {
+    const { supported_options: options, ...rest } = feature;
+    assertCoreFeature(rest, `bare ${feature.external_id}`);
+    assert.deepEqual(options ?? [], []);
+  }
 });

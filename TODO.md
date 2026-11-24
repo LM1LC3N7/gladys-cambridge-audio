@@ -66,6 +66,16 @@ up to date at the end of every milestone.
 
 ## Decisions
 
+- **SDK `^0.16.1`** (2026-11-24, migration wave 10): it adds the ai, tts and
+  music types, and its fake Gladys refuses a feature without a name, boolean
+  `read_only`/`has_feedback` or finite `min`/`max`; no effect here
+  (`poll_frequency` unused, the devices carry `should_poll: false`). Every
+  feature already conformed; `test/helpers/coreFeature.js` now checks each one
+  against the core model (test/manifest.test.js). `npm test` runs with
+  `--test-timeout=60000`. The fake device clears its pending slow wake-up on
+  close: `test/app.test.js` no longer keeps its process alive 45 s after the
+  last test (62 s → 18 s). `keywords`, `countries` and `gladys_version >= 5.3.0`
+  wait until Gladys 5.3 is widespread.
 - Forum: no dedicated topic, no post from this module's work; one recap per
   wave in /t/10385, posted by the main session.
 - Reuse: noahhusby/aiostreammagic 2.13.2 (MIT, tag of 2026-06-05, the library

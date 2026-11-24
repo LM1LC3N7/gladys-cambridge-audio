@@ -9,7 +9,8 @@ A Gladys Assistant **external integration** for Cambridge Audio StreamMagic
 amplifiers and streamers, over their local websocket: a Node.js service (Node
 22+, ESM, no build step) that runs in its own sandboxed Docker container and
 talks to Gladys through
-[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js).
+[`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js)
+(v0.16).
 Its runtime dependencies are the SDK and `ws` (already a dependency of the
 SDK). It started from the official JavaScript template; the device logic is
 ported from the `aiostreammagic` Python library (MIT, see
@@ -19,7 +20,7 @@ ported from the `aiostreammagic` Python library (MIT, see
 
 ```bash
 npm install
-npm test                                  # node --test, the built-in runner
+npm test                                  # node --test --test-timeout=60000
 node --test test/app.test.js              # one file
 node --test --test-name-pattern "volume"  # tests whose name matches
 npm run cover                             # regenerates cover.png
@@ -55,6 +56,12 @@ test/                             node --test, fake Gladys + fake StreamMagic de
 
 ## Rules
 
+- **Features follow the core model.** Every feature has a numeric `min` and
+  `max` (0/0 for text), a non-empty name, `read_only` and `has_feedback`:
+  Gladys answers HTTP 422 otherwise. The SDK's fake Gladys (0.16.1) checks
+  part of it; `test/helpers/coreFeature.js` checks all (test/manifest.test.js).
+  Devices carry `should_poll: false` (Gladys 5.3 polls a device with
+  `poll_frequency` unless it says so).
 - **External ids are forever.** Build them with
   `gladys.externalIds(type, platformId)`, `platformId` being the unique id the
   platform gives the device (here the `unit_id`), never a label. Gladys keys
